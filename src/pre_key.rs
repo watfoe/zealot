@@ -220,7 +220,12 @@ mod tests {
 
         // Verify the signature directly
         let encoded = pre_key.encode_for_signature();
-        assert!(identity_key.get_public_signing_key().verify(&encoded, &signature1).is_ok());
+        assert!(
+            identity_key
+                .get_public_signing_key()
+                .verify(&encoded, &signature1)
+                .is_ok()
+        );
     }
 
     #[test]
