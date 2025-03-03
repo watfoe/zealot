@@ -1,6 +1,7 @@
 use rand_core::{OsRng, TryRngCore};
 use x25519_dalek::StaticSecret;
 
+#[derive(Clone)]
 pub struct OneTimePreKey {
     pre_key: StaticSecret,
     id: u32,

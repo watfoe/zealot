@@ -1,4 +1,4 @@
-use crate::IdentityKey;
+use crate::{IdentityKey, OneTimePreKey};
 use ed25519_dalek::Verifier;
 use rand_core::{OsRng, TryRngCore};
 use x25519_dalek::StaticSecret;
@@ -101,10 +101,15 @@ pub struct PreKeyBundle {
     signed_pre_key_id: u32,
     signed_pre_key_public: x25519_dalek::PublicKey,
     signature: ed25519_dalek::Signature,
+    one_time_pre_key_public: Option<x25519_dalek::PublicKey>,
 }
 
 impl PreKeyBundle {
-    pub fn new(identity_key: &IdentityKey, signed_pre_key: &SignedPreKey) -> Self {
+    pub fn new(
+        identity_key: &IdentityKey,
+        signed_pre_key: &SignedPreKey,
+        one_time_pre_key: Option<&OneTimePreKey>,
+    ) -> Self {
         let identity_key_dh_public = identity_key.get_public_dh_key();
         let identity_key_verify_public = identity_key.get_public_signing_key();
         let signed_pre_key_public = signed_pre_key.get_public_key();
@@ -116,6 +121,7 @@ impl PreKeyBundle {
             signed_pre_key_id: signed_pre_key.get_id(),
             signed_pre_key_public,
             signature,
+            one_time_pre_key_public: one_time_pre_key.map(|key| key.get_public_key()),
         }
     }
 
@@ -123,6 +129,22 @@ impl PreKeyBundle {
         let encoded_key = self.signed_pre_key_public.to_bytes();
         self.identity_key_verify_public
             .verify(&encoded_key, &self.signature)
+    }
+
+    pub fn get_signed_pre_key_public(&self) -> x25519_dalek::PublicKey {
+        self.signed_pre_key_public
+    }
+
+    pub fn get_identity_key_public(&self) -> x25519_dalek::PublicKey {
+        self.identity_key_dh_public
+    }
+
+    pub fn get_identity_key_verify_public(&self) -> ed25519_dalek::VerifyingKey {
+        self.identity_key_verify_public
+    }
+
+    pub fn get_one_time_pre_key_public(&self) -> Option<x25519_dalek::PublicKey> {
+        self.one_time_pre_key_public
     }
 }
 
@@ -185,7 +207,7 @@ mod tests {
         let pre_key = SignedPreKey::new(99);
 
         // Create a bundle
-        let bundle = PreKeyBundle::new(&identity_key, &pre_key);
+        let bundle = PreKeyBundle::new(&identity_key, &pre_key, None);
 
         // Verify the bundle
         assert!(bundle.verify().is_ok());
@@ -201,6 +223,7 @@ mod tests {
             signed_pre_key_id: pre_key.get_id(),
             signed_pre_key_public: pre_key.get_public_key(),
             signature: pre_key.signature(&identity_key),
+            one_time_pre_key_public: None,
         };
 
         // This should fail verification
@@ -233,7 +256,7 @@ mod tests {
         let identity_key = IdentityKey::new();
         let pre_key = SignedPreKey::new(77);
 
-        let mut bundle = PreKeyBundle::new(&identity_key, &pre_key);
+        let mut bundle = PreKeyBundle::new(&identity_key, &pre_key, None);
 
         // Tamper with the signed pre-key
         let another_pre_key = SignedPreKey::new(78);
