@@ -5,7 +5,7 @@ use zeroize::Zeroize;
 
 use crate::{IdentityKey, OneTimePreKey, PreKeyBundle, SignedPreKey, generate_random_seed};
 
-const SALT: &[u8] = b"Zealot-Naive-E2E-v1";
+const SALT: &[u8] = b"Zealot-E2E-NaCl";
 
 pub struct EphemeralKey {
     key: StaticSecret,

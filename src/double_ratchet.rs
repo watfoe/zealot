@@ -1,8 +1,10 @@
 use crate::error::Error;
 use crate::generate_random_seed;
+use aes_gcm::KeyInit;
 use aes_gcm::aead::Aead;
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+use aes_gcm::{Aes256Gcm, Nonce};
 use hkdf::Hkdf;
+use hmac::{Hmac, Mac as HmacMac};
 use rand_core::{OsRng, TryRngCore};
 use sha2::Sha256;
 use std::cell::RefCell;
@@ -10,9 +12,7 @@ use std::collections::HashMap;
 use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 use zeroize::Zeroize;
 
-const ROOT_KDF_INFO: &[u8] = b"DoubleRatchet_Root";
-const CHAIN_KDF_INFO: &[u8] = b"DoubleRatchet_Chain";
-const MESSAGE_KDF_INFO: &[u8] = b"DoubleRatchet_Message";
+const ROOT_KDF_INFO: &[u8] = b"Zealot-E2E-Info";
 
 const NONCE_SIZE: usize = 12; // AES-GCM uses 12-byte (96-bit) nonces
 
@@ -47,20 +47,23 @@ impl Chain {
 
     /// Advances the chain and returns a message key
     fn next(&mut self) -> [u8; 32] {
-        let hkdf = Hkdf::<Sha256>::new(None, &self.chain_key);
+        type HmacSha256 = Hmac<Sha256>;
 
-        let mut chain_key = [0u8; 32];
-        hkdf.expand(&[CHAIN_KDF_INFO, &[1]].concat(), &mut chain_key)
-            .expect("HKDF expansion failed for chain key");
+        let mut chain_mac = <HmacSha256 as HmacMac>::new_from_slice(&self.chain_key)
+            .expect("HMAC initialization failed");
+        chain_mac.update(&[0x01]);
+        let chain_result = chain_mac.finalize().into_bytes();
 
-        let mut message_key = [0u8; 32];
-        hkdf.expand(&[MESSAGE_KDF_INFO, &[2]].concat(), &mut message_key)
-            .expect("HKDF expansion failed for message key");
+        let mut message_mac = <HmacSha256 as HmacMac>::new_from_slice(&self.chain_key)
+            .expect("HMAC initialization failed");
+        message_mac.update(&[0x02]);
+        let message_result = message_mac.finalize().into_bytes();
 
-        // Update the chain state
-        self.chain_key = chain_key;
+        self.chain_key.copy_from_slice(&chain_result);
         self.index += 1;
 
+        let mut message_key = [0u8; 32];
+        message_key.copy_from_slice(&message_result);
         message_key
     }
 
@@ -85,7 +88,6 @@ pub struct MessageHeader {
 
 impl MessageHeader {
     pub fn serialize(&self, buffer: &mut Vec<u8>) {
-        // Public key (32 bytes) + Previous chain length (4 bytes) + Message number (4 bytes)
         buffer.extend_from_slice(self.public_key.as_bytes());
         buffer.extend_from_slice(&self.previous_chain_length.to_be_bytes());
         buffer.extend_from_slice(&self.message_number.to_be_bytes());
@@ -242,10 +244,10 @@ impl DoubleRatchet {
         let mut new_root_key = [0u8; 32];
         let mut chain_key = [0u8; 32];
 
-        hkdf.expand(&[ROOT_KDF_INFO, &[1]].concat(), &mut new_root_key)
+        hkdf.expand(&[ROOT_KDF_INFO, &[0x01]].concat(), &mut new_root_key)
             .expect("HKDF expansion failed for root key");
 
-        hkdf.expand(&[ROOT_KDF_INFO, &[2]].concat(), &mut chain_key)
+        hkdf.expand(&[ROOT_KDF_INFO, &[0x02]].concat(), &mut chain_key)
             .expect("HKDF expansion failed for chain key");
 
         dh_output.zeroize();

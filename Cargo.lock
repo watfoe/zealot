@@ -567,6 +567,7 @@ dependencies = [
  "aes-gcm",
  "ed25519-dalek",
  "hkdf",
+ "hmac",
  "rand_core 0.9.3",
  "sha2",
  "thiserror",
