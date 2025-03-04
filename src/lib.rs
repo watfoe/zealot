@@ -15,4 +15,3 @@ pub use double_ratchet::*;
 
 mod error;
 pub use error::Error;
-

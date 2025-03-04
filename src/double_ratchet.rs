@@ -5,6 +5,7 @@ use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use hkdf::Hkdf;
 use rand_core::{OsRng, TryRngCore};
 use sha2::Sha256;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 use zeroize::Zeroize;
@@ -14,6 +15,21 @@ const CHAIN_KDF_INFO: &[u8] = b"DoubleRatchet_Chain";
 const MESSAGE_KDF_INFO: &[u8] = b"DoubleRatchet_Message";
 
 const NONCE_SIZE: usize = 12; // AES-GCM uses 12-byte (96-bit) nonces
+
+thread_local! {
+    static AD_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(256));
+}
+
+fn with_ad_buffer<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut Vec<u8>) -> R,
+{
+    AD_BUFFER.with(|buffer| {
+        let mut buffer = buffer.borrow_mut();
+        buffer.clear();
+        f(&mut buffer)
+    })
+}
 
 /// Ratchet chain for deriving keys
 struct Chain {
@@ -68,15 +84,11 @@ pub struct MessageHeader {
 }
 
 impl MessageHeader {
-    pub fn serialize(&self) -> Vec<u8> {
+    pub fn serialize(&self, buffer: &mut Vec<u8>) {
         // Public key (32 bytes) + Previous chain length (4 bytes) + Message number (4 bytes)
-        let mut bytes = Vec::with_capacity(32 + 4 + 4);
-
-        bytes.extend_from_slice(self.public_key.as_bytes());
-        bytes.extend_from_slice(&self.previous_chain_length.to_be_bytes());
-        bytes.extend_from_slice(&self.message_number.to_be_bytes());
-
-        bytes
+        buffer.extend_from_slice(self.public_key.as_bytes());
+        buffer.extend_from_slice(&self.previous_chain_length.to_be_bytes());
+        buffer.extend_from_slice(&self.message_number.to_be_bytes());
     }
 
     /// Deserialize a header from bytes
@@ -282,15 +294,14 @@ impl DoubleRatchet {
             message_number: self.sending_message_number,
         };
 
-        let mut ad = Vec::with_capacity(associated_data.len() + header.serialize().len());
-        ad.extend_from_slice(associated_data);
-        ad.extend_from_slice(&header.serialize());
-
-        // Increment message number
-        self.sending_message_number += 1;
-
         let message_key = self.sending_chain.next();
-        let ciphertext = Self::encrypt_message(&message_key, plaintext, &ad)?;
+        let ciphertext = with_ad_buffer(|buffer| {
+            buffer.extend_from_slice(associated_data);
+            let _ = &header.serialize(buffer);
+            Self::encrypt_message(&message_key, plaintext, buffer)
+        })?;
+
+        self.sending_message_number += 1;
 
         Ok(RatchetMessage { header, ciphertext })
     }
@@ -301,12 +312,10 @@ impl DoubleRatchet {
         message: RatchetMessage,
         associated_data: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        let mut ad = Vec::with_capacity(associated_data.len() + message.header.serialize().len());
-        ad.extend_from_slice(associated_data);
-        ad.extend_from_slice(&message.header.serialize());
-
         // Try to decrypt with skipped message keys
-        if let Some(plaintext) = self.try_skipped_message_keys(&message, &ad)? {
+        if let Some(plaintext) =
+            self.try_skipped_message_keys(&message, associated_data, &message.header)?
+        {
             return Ok(plaintext);
         }
 
@@ -326,16 +335,22 @@ impl DoubleRatchet {
 
         // Skip ahead if needed
         if message.header.message_number > self.receiving_message_number {
-            self.skip_message_keys(message.header.message_number).map_err(|err| {
-                *self = double_ratchet_clone.clone();
-                err
-            })?;
+            self.skip_message_keys(message.header.message_number)
+                .map_err(|err| {
+                    *self = double_ratchet_clone.clone();
+                    err
+                })?;
         }
 
         // Get the current message key
         let message_key = self.receiving_chain.next();
 
-        let plaintext = Self::decrypt_message(&message_key, &message.ciphertext, &ad).map_err(|err| {
+        let plaintext = with_ad_buffer(|buffer| {
+            buffer.extend_from_slice(associated_data);
+            let _ = &message.header.serialize(buffer);
+            Self::decrypt_message(&message_key, &message.ciphertext, buffer)
+        })
+        .map_err(|err| {
             *self = double_ratchet_clone;
             err
         })?;
@@ -350,13 +365,18 @@ impl DoubleRatchet {
         &mut self,
         message: &RatchetMessage,
         associated_data: &[u8],
+        header: &MessageHeader,
     ) -> Result<Option<Vec<u8>>, Error> {
         if let Some(dhr) = self.dh_remote_public {
             if let Some(mk) = self
                 .skipped_message_keys
                 .remove(&(dhr, message.header.message_number))
             {
-                let plaintext = Self::decrypt_message(&mk, &message.ciphertext, associated_data)?;
+                let plaintext = with_ad_buffer(|buffer| {
+                    buffer.extend_from_slice(associated_data);
+                    let _ = &header.serialize(buffer);
+                    Self::decrypt_message(&mk, &message.ciphertext, buffer)
+                })?;
                 return Ok(Some(plaintext));
             }
         }

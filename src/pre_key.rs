@@ -222,7 +222,7 @@ mod tests {
 
         // Create another bundle with different keys
         let another_identity = IdentityKey::new();
-        let another_pre_key = SignedPreKey::new(100);
+        // let another_pre_key = SignedPreKey::new(100);
 
         // Try to create an invalid bundle (mixing keys)
         let invalid_bundle = PreKeyBundle {

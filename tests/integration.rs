@@ -91,13 +91,8 @@ mod integration_tests {
 
         // Step 12: Alice decrypts Bob's reply
         println!("Step 12: Alice decrypts Bob's reply...");
-        let decrypted_reply_1 = alice_ratchet
-            .decrypt(encrypted_reply_1, bob_ad_1)
-            .unwrap();
-        assert_eq!(
-            String::from_utf8(decrypted_reply_1).unwrap(),
-            bob_message_1
-        );
+        let decrypted_reply_1 = alice_ratchet.decrypt(encrypted_reply_1, bob_ad_1).unwrap();
+        assert_eq!(String::from_utf8(decrypted_reply_1).unwrap(), bob_message_1);
 
         // Step 13: Alice sends another message (testing ratchet advancement)
         println!("Step 13: Alice sends a second message...");
@@ -129,37 +124,24 @@ mod integration_tests {
         let mut encrypted_messages = Vec::new();
 
         for (i, msg) in alice_messages.iter().enumerate() {
-            encrypted_messages.push(
-                alice_ratchet
-                    .encrypt(msg.as_bytes(), alice_ads[i])
-                    .unwrap(),
-            );
+            encrypted_messages.push(alice_ratchet.encrypt(msg.as_bytes(), alice_ads[i]).unwrap());
         }
 
         // Bob receives them out of order: B, C, A
         let decrypted_b = bob_ratchet
             .decrypt(encrypted_messages[1].clone(), alice_ads[1])
             .unwrap();
-        assert_eq!(
-            String::from_utf8(decrypted_b).unwrap(),
-            alice_messages[1]
-        );
+        assert_eq!(String::from_utf8(decrypted_b).unwrap(), alice_messages[1]);
 
         let decrypted_c = bob_ratchet
             .decrypt(encrypted_messages[2].clone(), alice_ads[2])
             .unwrap();
-        assert_eq!(
-            String::from_utf8(decrypted_c).unwrap(),
-            alice_messages[2]
-        );
+        assert_eq!(String::from_utf8(decrypted_c).unwrap(), alice_messages[2]);
 
         let decrypted_a = bob_ratchet
             .decrypt(encrypted_messages[0].clone(), alice_ads[0])
             .unwrap();
-        assert_eq!(
-            String::from_utf8(decrypted_a).unwrap(),
-            alice_messages[0]
-        );
+        assert_eq!(String::from_utf8(decrypted_a).unwrap(), alice_messages[0]);
 
         // Step 16: Test multiple DH ratchet rotations
         println!("Step 16: Testing multiple DH ratchet rotations...");
@@ -174,7 +156,9 @@ mod integration_tests {
             // Alice to Bob
             let alice_msg = format!("Rotation test from Alice {}", i);
             let alice_ad = format!("Alice->Bob:{}", i + 6).into_bytes();
-            let encrypted = alice_ratchet.encrypt(alice_msg.as_bytes(), &alice_ad).unwrap();
+            let encrypted = alice_ratchet
+                .encrypt(alice_msg.as_bytes(), &alice_ad)
+                .unwrap();
             let decrypted = bob_ratchet.decrypt(encrypted, &alice_ad).unwrap();
             assert_eq!(String::from_utf8(decrypted).unwrap(), alice_msg);
         }
@@ -192,7 +176,9 @@ mod integration_tests {
         assert!(wrong_ad_result.is_err());
 
         // Decrypting with correct AD should work
-        let correct_ad_result = bob_ratchet.decrypt(encrypted_diff_ad, alice_ad_diff).unwrap();
+        let correct_ad_result = bob_ratchet
+            .decrypt(encrypted_diff_ad, alice_ad_diff)
+            .unwrap();
         assert_eq!(
             String::from_utf8(correct_ad_result).unwrap(),
             alice_message_diff_ad
@@ -299,9 +285,7 @@ mod integration_tests {
             .unwrap();
 
         // Bob and Charlie decrypt messages
-        let decrypted_bob = bob_ratchet
-            .decrypt(encrypted_bob, b"Alice->Bob")
-            .unwrap();
+        let decrypted_bob = bob_ratchet.decrypt(encrypted_bob, b"Alice->Bob").unwrap();
         let decrypted_charlie = charlie_ratchet
             .decrypt(encrypted_charlie, b"Alice->Charlie")
             .unwrap();
@@ -331,10 +315,7 @@ mod integration_tests {
             .decrypt(encrypted_charlie_reply, b"Charlie->Alice")
             .unwrap();
 
-        assert_eq!(
-            String::from_utf8(decrypted_bob_reply).unwrap(),
-            bob_reply
-        );
+        assert_eq!(String::from_utf8(decrypted_bob_reply).unwrap(), bob_reply);
         assert_eq!(
             String::from_utf8(decrypted_charlie_reply).unwrap(),
             charlie_reply
@@ -391,14 +372,20 @@ mod integration_tests {
         for i in 0..3 {
             // Alice to Bob
             let msg = format!("Message {}", i);
-            let encrypted = alice_ratchet.encrypt(msg.as_bytes(), b"Alice->Bob").unwrap();
+            let encrypted = alice_ratchet
+                .encrypt(msg.as_bytes(), b"Alice->Bob")
+                .unwrap();
             let decrypted = bob_ratchet.decrypt(encrypted, b"Alice->Bob").unwrap();
             assert_eq!(String::from_utf8(decrypted).unwrap(), msg);
 
             // Bob to Alice
             let reply = format!("Reply {}", i);
-            let encrypted_reply = bob_ratchet.encrypt(reply.as_bytes(), b"Bob->Alice").unwrap();
-            let decrypted_reply = alice_ratchet.decrypt(encrypted_reply, b"Bob->Alice").unwrap();
+            let encrypted_reply = bob_ratchet
+                .encrypt(reply.as_bytes(), b"Bob->Alice")
+                .unwrap();
+            let decrypted_reply = alice_ratchet
+                .decrypt(encrypted_reply, b"Bob->Alice")
+                .unwrap();
             assert_eq!(String::from_utf8(decrypted_reply).unwrap(), reply);
         }
 
