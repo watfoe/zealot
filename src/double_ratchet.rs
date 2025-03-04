@@ -410,29 +410,32 @@ impl DoubleRatchet {
         plaintext: &[u8],
         associated_data: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        let key = aes_gcm::Key::<Aes256Gcm>::from_slice(key);
-        let cipher = Aes256Gcm::new(&key);
+        // Derive encryption key, authentication key, and IV from the message key
+        let hkdf = Hkdf::<Sha256>::new(None, key);
 
+        // Generate 80 bytes: 32 for encryption key, 32 for auth key, 16 for IV
+        let mut derived_material = [0u8; 80];
+        hkdf.expand(b"Zealot-E2E-Keys", &mut derived_material)
+            .expect("HKDF expansion failed");
+
+        // Extract the nonce (use first 12 bytes of the IV)
         let mut nonce_bytes = [0u8; NONCE_SIZE];
-        OsRng.try_fill_bytes(&mut nonce_bytes)?;
+        nonce_bytes.copy_from_slice(&derived_material[64..64 + NONCE_SIZE]);
+
+        // Use the encryption key for AES-GCM
+        let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&derived_material[0..32]);
+        let cipher = Aes256Gcm::new(&key);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        match cipher.encrypt(
-            nonce,
-            aes_gcm::aead::Payload {
-                msg: plaintext,
-                aad: associated_data,
-            },
-        ) {
-            Ok(ciphertext) => {
-                // Prepend the nonce to the ciphertext
-                let mut result = Vec::with_capacity(NONCE_SIZE + ciphertext.len());
-                result.extend_from_slice(&nonce_bytes);
-                result.extend_from_slice(&ciphertext);
-                Ok(result)
-            }
-            Err(err) => Err(err.into()),
-        }
+        cipher
+            .encrypt(
+                nonce,
+                aes_gcm::aead::Payload {
+                    msg: plaintext,
+                    aad: associated_data,
+                },
+            )
+            .map_err(|_| Error("Message encryption failed".to_string()))
     }
 
     /// Decrypt a message
@@ -441,25 +444,28 @@ impl DoubleRatchet {
         ciphertext: &[u8],
         associated_data: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        if ciphertext.len() < NONCE_SIZE {
-            return Err(Error("Invalid ciphertext length".to_string()));
-        }
+        let hkdf = Hkdf::<Sha256>::new(None, key);
 
-        let nonce = Nonce::from_slice(&ciphertext[0..NONCE_SIZE]);
+        let mut derived_material = [0u8; 80];
+        hkdf.expand(b"Zealot-E2E-Keys", &mut derived_material)
+            .expect("HKDF expansion failed");
 
-        let aes_key = aes_gcm::Key::<Aes256Gcm>::from_slice(key);
+        let mut nonce_bytes = [0u8; NONCE_SIZE];
+        nonce_bytes.copy_from_slice(&derived_material[64..64 + NONCE_SIZE]);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let aes_key = aes_gcm::Key::<Aes256Gcm>::from_slice(&derived_material[0..32]);
         let cipher = Aes256Gcm::new(aes_key);
 
-        match cipher.decrypt(
-            nonce,
-            aes_gcm::aead::Payload {
-                msg: &ciphertext[NONCE_SIZE..],
-                aad: associated_data,
-            },
-        ) {
-            Ok(plaintext) => Ok(plaintext),
-            Err(err) => Err(Error(format!("Decoding: {}", err.to_string()))),
-        }
+        cipher
+            .decrypt(
+                nonce,
+                aes_gcm::aead::Payload {
+                    msg: &ciphertext,
+                    aad: associated_data,
+                },
+            )
+            .map_err(|_| Error("Message decryption failed".to_string()))
     }
 }
 
