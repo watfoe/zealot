@@ -113,18 +113,6 @@ pub struct RatchetMessage {
     ciphertext: Vec<u8>,
 }
 
-impl Drop for DoubleRatchet {
-    fn drop(&mut self) {
-        self.root_key.zeroize();
-
-        // Clear skipped message keys
-        for (_, key) in self.skipped_message_keys.drain() {
-            let mut key_copy = key;
-            key_copy.zeroize();
-        }
-    }
-}
-
 /// Double Ratchet implementation
 pub struct DoubleRatchet {
     dh_pair: StaticSecret,
@@ -142,6 +130,35 @@ pub struct DoubleRatchet {
     // Map<(ratchet_public_key, message_number): message_key>
     skipped_message_keys: HashMap<(PublicKey, u32), [u8; 32]>,
     max_skip: u32,
+}
+
+impl Clone for DoubleRatchet {
+    fn clone(&self) -> Self {
+        Self {
+            dh_pair: self.dh_pair.clone(),
+            dh_remote_public: self.dh_remote_public,
+            root_key: self.root_key,
+            sending_chain: Chain::new(self.sending_chain.chain_key),
+            receiving_chain: Chain::new(self.receiving_chain.chain_key),
+            previous_sending_chain_length: self.previous_sending_chain_length,
+            sending_message_number: self.sending_message_number,
+            receiving_message_number: self.receiving_message_number,
+            skipped_message_keys: self.skipped_message_keys.clone(),
+            max_skip: self.max_skip,
+        }
+    }
+}
+
+impl Drop for DoubleRatchet {
+    fn drop(&mut self) {
+        self.root_key.zeroize();
+
+        // Clear skipped message keys
+        for (_, key) in self.skipped_message_keys.drain() {
+            let mut key_copy = key;
+            key_copy.zeroize();
+        }
+    }
 }
 
 impl DoubleRatchet {
@@ -293,24 +310,37 @@ impl DoubleRatchet {
             return Ok(plaintext);
         }
 
+        // Clone the state so that if the decryption fails, we revert back to the old state
+        let double_ratchet_clone = self.clone();
+
         // Check if ratchet public key has changed
         if self.dh_remote_public.is_none()
             || message.header.public_key != self.dh_remote_public.unwrap()
         {
             // Ratchet step - DH key has changed
-            self.dh_ratchet(&message.header)?;
+            self.dh_ratchet(&message.header).map_err(|err| {
+                *self = double_ratchet_clone.clone();
+                err
+            })?;
         }
 
         // Skip ahead if needed
         if message.header.message_number > self.receiving_message_number {
-            self.skip_message_keys(message.header.message_number)?;
+            self.skip_message_keys(message.header.message_number).map_err(|err| {
+                *self = double_ratchet_clone.clone();
+                err
+            })?;
         }
 
         // Get the current message key
         let message_key = self.receiving_chain.next();
-        self.receiving_message_number += 1;
 
-        let plaintext = Self::decrypt_message(&message_key, &message.ciphertext, &ad)?;
+        let plaintext = Self::decrypt_message(&message_key, &message.ciphertext, &ad).map_err(|err| {
+            *self = double_ratchet_clone;
+            err
+        })?;
+
+        self.receiving_message_number += 1;
 
         Ok(plaintext)
     }
@@ -389,7 +419,6 @@ impl DoubleRatchet {
         ciphertext: &[u8],
         associated_data: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        // Ensure the ciphertext is at least as long as the nonce
         if ciphertext.len() < NONCE_SIZE {
             return Err(Error("Invalid ciphertext length".to_string()));
         }
@@ -429,7 +458,7 @@ mod tests {
             DoubleRatchet::initialize_as_first_sender(&shared_secret, &bob_spk.get_public_key());
 
         let bob_ratchet =
-            DoubleRatchet::initialize_as_first_receiver(&shared_secret, bob_spk.get_pre_key_pair());
+            DoubleRatchet::initialize_as_first_receiver(&shared_secret, bob_spk.get_key_pair());
 
         (alice_ratchet, bob_ratchet)
     }
@@ -607,7 +636,7 @@ mod tests {
         // 6. Bob initializes his Double Ratchet with the shared secret
         let mut bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
             &bob_shared_secret,
-            bob_signed_pre_key.get_pre_key_pair(),
+            bob_signed_pre_key.get_key_pair(),
         );
         // 7. Test message exchange
         let message = "This is a secure message using X3DH + Double Ratchet!";

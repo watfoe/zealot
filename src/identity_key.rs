@@ -63,10 +63,6 @@ impl IdentityKey {
         self.dh_key.diffie_hellman(public_key).to_bytes()
     }
 
-    pub fn get_dh_key_pair(&self) -> StaticSecret {
-        self.dh_key.clone()
-    }
-
     pub fn serialize(&self) -> Vec<u8> {
         // Combine private keys into a single bytearray
         let mut bytes = Vec::with_capacity(64);

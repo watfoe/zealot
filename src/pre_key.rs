@@ -26,16 +26,16 @@ impl SignedPreKey {
         (&self.pre_key).into()
     }
 
+    pub fn get_key_pair(&self) -> StaticSecret {
+        self.pre_key.clone()
+    }
+
     pub fn get_id(&self) -> u32 {
         self.id
     }
 
     pub fn dh(&self, public_key: &x25519_dalek::PublicKey) -> [u8; 32] {
         self.pre_key.diffie_hellman(public_key).to_bytes()
-    }
-
-    pub fn get_pre_key_pair(&self) -> StaticSecret {
-        self.pre_key.clone()
     }
 
     // Generate a signature for this pre-key using the identity key
