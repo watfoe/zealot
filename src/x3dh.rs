@@ -1,5 +1,5 @@
 use hkdf::Hkdf;
-use sha2::{Sha256, Sha512};
+use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
@@ -34,8 +34,18 @@ impl Drop for EphemeralKey {
 }
 
 pub struct X3DHResult {
-    shared_secret: Vec<u8>,      // The final derived shared secret
+    shared_secret: Vec<u8>,
     ephemeral_public: PublicKey, // A's ephemeral public key (sent to B)
+}
+
+impl X3DHResult {
+    pub fn get_public_key(&self) -> PublicKey {
+        self.ephemeral_public
+    }
+
+    pub fn get_shared_secret(self) -> Vec<u8> {
+        self.shared_secret
+    }
 }
 
 pub struct X3DH {
@@ -259,7 +269,6 @@ mod tests {
     #[test]
     fn test_ephemeral_key_zeroing() {
         let ephemeral = EphemeralKey::new();
-        let public = ephemeral.public_key();
 
         let other_key = EphemeralKey::new();
         let other_public = other_key.public_key();

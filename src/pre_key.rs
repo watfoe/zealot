@@ -34,6 +34,10 @@ impl SignedPreKey {
         self.pre_key.diffie_hellman(public_key).to_bytes()
     }
 
+    pub fn get_pre_key_pair(&self) -> StaticSecret {
+        self.pre_key.clone()
+    }
+
     // Generate a signature for this pre-key using the identity key
     pub fn signature(&self, identity_key: &IdentityKey) -> ed25519_dalek::Signature {
         let encoded = self.encode_for_signature();
@@ -133,6 +137,10 @@ impl PreKeyBundle {
 
     pub fn get_signed_pre_key_public(&self) -> x25519_dalek::PublicKey {
         self.signed_pre_key_public
+    }
+
+    pub fn get_signed_pre_id(&self) -> u32 {
+        self.signed_pre_key_id
     }
 
     pub fn get_identity_key_public(&self) -> x25519_dalek::PublicKey {
