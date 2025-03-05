@@ -1,11 +1,13 @@
 use ed25519_dalek::Signer;
 use ed25519_dalek::{SecretKey, SigningKey, Verifier, ed25519};
-use rand_core::{OsError, OsRng, TryRngCore};
+use rand::rngs::OsRng;
+use rand::TryRngCore;
 use x25519_dalek::StaticSecret;
+use crate::Error;
 
-pub fn generate_random_seed() -> Result<[u8; 32], OsError> {
+pub fn generate_random_seed() -> Result<[u8; 32], Error> {
     let mut seed = [0u8; 32];
-    OsRng.try_fill_bytes(&mut seed)?;
+    OsRng.try_fill_bytes(&mut seed).map_err(|_| Error::Random)?;
     Ok(seed)
 }
 
@@ -71,9 +73,9 @@ impl IdentityKey {
         bytes
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.len() != 64 {
-            return Err("Invalid identity key length");
+            return Err(Error::Serde("Invalid identity key length".to_string()));
         }
 
         let mut private_sk_bytes = [0u8; 32];

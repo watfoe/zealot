@@ -5,12 +5,12 @@ use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, Nonce};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac as HmacMac};
-use rand_core::{OsRng, TryRngCore};
 use sha2::Sha256;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 use zeroize::Zeroize;
+use crate::ratchet_message::{MessageHeader, RatchetMessage};
 
 const ROOT_KDF_INFO: &[u8] = b"Zealot-E2E-Info";
 
@@ -76,55 +76,6 @@ impl Drop for Chain {
     fn drop(&mut self) {
         self.chain_key.zeroize();
     }
-}
-
-/// Header for a ratchet message
-#[derive(Clone, Copy)]
-pub struct MessageHeader {
-    public_key: PublicKey,
-    previous_chain_length: u32,
-    message_number: u32,
-}
-
-impl MessageHeader {
-    pub fn serialize(&self, buffer: &mut Vec<u8>) {
-        buffer.extend_from_slice(self.public_key.as_bytes());
-        buffer.extend_from_slice(&self.previous_chain_length.to_be_bytes());
-        buffer.extend_from_slice(&self.message_number.to_be_bytes());
-    }
-
-    /// Deserialize a header from bytes
-    pub fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() < 32 + 4 + 4 {
-            return Err(Error("Invalid header length".to_string()));
-        }
-
-        let mut dh_bytes = [0u8; 32];
-        dh_bytes.copy_from_slice(&bytes[0..32]);
-
-        let mut pn_bytes = [0u8; 4];
-        pn_bytes.copy_from_slice(&bytes[32..36]);
-
-        let mut n_bytes = [0u8; 4];
-        n_bytes.copy_from_slice(&bytes[36..40]);
-
-        let public_key = PublicKey::from(dh_bytes);
-        let previous_chain_length = u32::from_be_bytes(pn_bytes);
-        let message_number = u32::from_be_bytes(n_bytes);
-
-        Ok(MessageHeader {
-            public_key,
-            previous_chain_length,
-            message_number,
-        })
-    }
-}
-
-/// Complete ratchet message with header and ciphertext
-#[derive(Clone)]
-pub struct RatchetMessage {
-    header: MessageHeader,
-    ciphertext: Vec<u8>,
 }
 
 /// Double Ratchet implementation
@@ -389,7 +340,7 @@ impl DoubleRatchet {
     /// Skip message keys to handle out-of-order messages
     fn skip_message_keys(&mut self, until: u32) -> Result<(), Error> {
         if until - self.receiving_message_number > self.max_skip {
-            return Err(Error("Too many skipped messages".to_string()));
+            return Err(Error::Protocol("Too many skipped messages".to_string()));
         }
 
         while self.receiving_message_number < until {
@@ -435,7 +386,7 @@ impl DoubleRatchet {
                     aad: associated_data,
                 },
             )
-            .map_err(|_| Error("Message encryption failed".to_string()))
+            .map_err(|_| Error::Protocol("Message encryption failed".to_string()))
     }
 
     /// Decrypt a message
@@ -465,12 +416,14 @@ impl DoubleRatchet {
                     aad: associated_data,
                 },
             )
-            .map_err(|_| Error("Message decryption failed".to_string()))
+            .map_err(|_| Error::Protocol("Message decryption failed".to_string()))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use rand::rngs::OsRng;
+    use rand::TryRngCore;
     use super::*;
     use crate::{IdentityKey, OneTimePreKey, PreKeyBundle, SignedPreKey, X3DH};
 

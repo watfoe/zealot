@@ -1,6 +1,7 @@
 use crate::{IdentityKey, OneTimePreKey};
 use ed25519_dalek::Verifier;
-use rand_core::{OsRng, TryRngCore};
+use rand::rngs::OsRng;
+use rand::TryRngCore;
 use x25519_dalek::StaticSecret;
 
 pub struct SignedPreKey {

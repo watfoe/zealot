@@ -1,17 +1,29 @@
-use rand_core::OsError;
+#[derive(thiserror::Error, Debug, Clone, Eq, PartialEq)]
+pub enum Error {
+    #[error("Cryptographic operation failed: {0}")]
+    Crypto(String),
 
-#[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub struct Error(pub String);
+    #[error("Protocol Violation: {0}")]
+    Protocol(String),
+
+    #[error("Session state error")]
+    Session,
+
+    #[error("Identity key error")]
+    Identity(String),
+
+    #[error("Pre-key error")]
+    PreKey(String),
+
+    #[error("Random number generation failed")]
+    Random,
+
+    #[error("Serialization/deserialization failed: {0}")]
+    Serde(String),
+}
 
 impl From<aes_gcm::Error> for Error {
     fn from(value: aes_gcm::Error) -> Self {
-        Self(value.to_string())
-    }
-}
-
-impl From<OsError> for Error {
-    fn from(value: OsError) -> Self {
-        Self(value.to_string())
+        Self::Crypto(value.to_string())
     }
 }

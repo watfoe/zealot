@@ -3,7 +3,7 @@ use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
-use crate::{IdentityKey, OneTimePreKey, PreKeyBundle, SignedPreKey, generate_random_seed};
+use crate::{IdentityKey, OneTimePreKey, PreKeyBundle, SignedPreKey, generate_random_seed, Error};
 
 const SALT: &[u8] = b"Zealot-E2E-NaCl";
 
@@ -64,11 +64,11 @@ impl X3DH {
         &self,
         a_identity: &IdentityKey,
         b_bundle: &PreKeyBundle,
-    ) -> Result<X3DHResult, &'static str> {
+    ) -> Result<X3DHResult, Error> {
         // First, verify B's bundle
         b_bundle
             .verify()
-            .map_err(|_| "Failed to verify pre-key bundle")?;
+            .map_err(|_| Error::PreKey("Failed to verify pre-key bundle".to_string()))?;
 
         let a_ephemeral = EphemeralKey::new();
 
@@ -105,7 +105,7 @@ impl X3DH {
         b_one_time_pre_key: Option<OneTimePreKey>,
         a_identity_public: &PublicKey,
         a_ephemeral_public: &PublicKey,
-    ) -> Result<Vec<u8>, &'static str> {
+    ) -> Result<Vec<u8>, Error> {
         // DH1 = DH(SPKb, IKa) - B's Signed Pre-Key and A's Identity Key
         let mut dh1 = b_signed_pre_key.dh(a_identity_public);
         // DH2 = DH(IKb, EKa) - B's Identity Key and A's Ephemeral Key
@@ -113,10 +113,10 @@ impl X3DH {
         // DH3 = DH(SPKb, EKa) - B's Signed Pre-Key and A's Ephemeral Key
         let mut dh3 = b_signed_pre_key.dh(a_ephemeral_public);
         // DH4 = DH(OPKb, EKa) - B's One-Time Pre-Key and A's Ephemeral Key
-        let dh4_opt = b_one_time_pre_key.map(|opk| {
+        let dh4_opt: Option<Result<[u8; 32], Error>> = b_one_time_pre_key.map(|opk| {
             let result = opk
                 .dh(a_ephemeral_public)
-                .map_err(|_| "Error performing DH with one-time pre-key")?;
+                .map_err(|_| Error::PreKey("Error performing DH with one-time pre-key".to_string()))?;
             Ok(result)
         });
 
@@ -143,7 +143,7 @@ impl X3DH {
         dh3: &[u8; 32],
         dh4: Option<&[u8; 32]>,
         ephemeral_public: &PublicKey,
-    ) -> Result<X3DHResult, &'static str> {
+    ) -> Result<X3DHResult, Error> {
         // IKM = DH1 || DH2 || DH3 || DH4 (if available)
         let mut key_material = Vec::new();
         key_material.extend_from_slice(dh1);
@@ -159,7 +159,7 @@ impl X3DH {
 
         let mut shared_secret = vec![0u8; 42]; // 256-bit shared secret
         hkdf.expand(&self.info, &mut shared_secret)
-            .map_err(|_| "HKDF expansion failed")?;
+            .map_err(|_| Error::Crypto("HKDF expansion failed".to_string()))?;
 
         Ok(X3DHResult {
             shared_secret,

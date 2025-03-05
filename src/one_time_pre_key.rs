@@ -1,5 +1,7 @@
-use rand_core::{OsRng, TryRngCore};
-use x25519_dalek::StaticSecret;
+use std::collections::HashMap;
+use rand::rngs::OsRng;
+use rand::TryRngCore;
+use x25519_dalek::{PublicKey, StaticSecret};
 
 #[derive(Clone)]
 pub struct OneTimePreKey {
@@ -23,7 +25,7 @@ impl OneTimePreKey {
         }
     }
 
-    pub fn get_public_key(&self) -> x25519_dalek::PublicKey {
+    pub fn get_public_key(&self) -> PublicKey {
         (&self.pre_key).into()
     }
 
@@ -39,7 +41,7 @@ impl OneTimePreKey {
         self.used = true;
     }
 
-    pub fn dh(self, public_key: &x25519_dalek::PublicKey) -> Result<[u8; 32], &'static str> {
+    pub fn dh(self, public_key: &PublicKey) -> Result<[u8; 32], &'static str> {
         if self.used {
             return Err("Pre-key already used");
         }
@@ -102,6 +104,58 @@ impl OneTimePreKey {
             created_at,
             used,
         })
+    }
+}
+
+/// OneTimePreKey Manager
+pub struct OneTimePreKeyStore {
+    keys: HashMap<u32, OneTimePreKey>,
+    next_id: u32,
+    max_keys: usize,
+}
+
+impl OneTimePreKeyStore {
+    pub fn new(max_keys: usize) -> Self {
+        Self {
+            keys: HashMap::new(),
+            next_id: 1,
+            max_keys,
+        }
+    }
+
+    pub fn generate_keys(&mut self, count: usize) -> Vec<u32> {
+        let mut ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.keys.insert(id, OneTimePreKey::new(id));
+            ids.push(id);
+        }
+        ids
+    }
+
+    pub fn get(&self, id: u32) -> Option<&OneTimePreKey> {
+        self.keys.get(&id)
+    }
+
+    pub fn get_public_keys(&self) -> HashMap<u32, PublicKey> {
+        let mut indexed_pks = HashMap::new();
+        self.keys.iter().for_each(|(idx, otpk)| {indexed_pks.insert(*idx, otpk.get_public_key());});
+
+        indexed_pks
+    }
+
+    pub fn take(&mut self, id: u32) -> Option<OneTimePreKey> {
+        self.keys.remove(&id)
+    }
+
+    pub fn count(&self) -> usize {
+        self.keys.len()
+    }
+
+    pub fn replenish(&mut self) -> Vec<u32> {
+        let needed = self.max_keys.saturating_sub(self.keys.len());
+        self.generate_keys(needed)
     }
 }
 
