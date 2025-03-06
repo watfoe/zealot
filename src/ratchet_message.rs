@@ -24,9 +24,10 @@ impl MessageHeader {
 
         bytes
     }
+}
 
-    /// Deserialize a header from bytes
-    pub fn from_bytes(bytes: &[u8; 40]) -> Self {
+impl From<[u8; 40]> for MessageHeader {
+    fn from(bytes: [u8; 40]) -> Self {
         let mut dh_bytes = [0u8; 32];
         dh_bytes.copy_from_slice(&bytes[0..32]);
 
@@ -40,7 +41,7 @@ impl MessageHeader {
         let previous_chain_length = u32::from_be_bytes(pn_bytes);
         let message_number = u32::from_be_bytes(n_bytes);
 
-        MessageHeader {
+        Self {
             public_key,
             previous_chain_length,
             message_number,
@@ -74,7 +75,7 @@ impl RatchetMessage {
         let mut header_bytes = [0u8; 40];
         header_bytes.copy_from_slice(&bytes[0..40]);
 
-        let header = MessageHeader::from_bytes(&header_bytes);
+        let header = MessageHeader::from(header_bytes);
         let ciphertext = bytes[40..].to_vec();
 
         Ok(RatchetMessage { header, ciphertext })

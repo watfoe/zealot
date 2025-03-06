@@ -151,7 +151,7 @@ impl Drop for DoubleRatchet {
 impl DoubleRatchet {
     /// Initialize a ratchet as the first sender (Alice)
     pub fn initialize_as_first_sender(
-        shared_secret: [u8; 32],
+        mut shared_secret: [u8; 32],
         receiver_public_key: &PublicKey,
     ) -> Self {
         let dh_pair = StaticSecret::from(generate_random_seed().unwrap());
@@ -159,6 +159,8 @@ impl DoubleRatchet {
         // Perform initial DH and KDF
         let dh_output = dh_pair.diffie_hellman(receiver_public_key);
         let (new_root_key, chain_key) = Self::kdf_rk(&shared_secret, dh_output);
+
+        shared_secret.zeroize();
 
         // Initialize chains
         let sending_chain = Chain::new(chain_key);

@@ -65,34 +65,27 @@ impl X3DH {
         a_identity: &IdentityKey,
         b_bundle: &PreKeyBundle,
     ) -> Result<X3DHResult, Error> {
-        // First, verify B's bundle
         b_bundle
             .verify()
             .map_err(|_| Error::PreKey("Failed to verify pre-key bundle".to_string()))?;
 
         let a_ephemeral = EphemeralKey::new();
 
-        // DH1 = DH(IKa, SPKb) - A's Identity Key and B's Signed Pre-Key
-        let mut dh1 = a_identity.dh(&b_bundle.get_signed_pre_key_public());
-        // DH2 = DH(EKa, IKb) - A's Ephemeral Key and B's Identity Key
-        let mut dh2 = a_ephemeral.dh(&b_bundle.get_identity_key_public());
-        // DH3 = DH(EKa, SPKb) - A's Ephemeral Key and B's Signed Pre-Key
-        let mut dh3 = a_ephemeral.dh(&b_bundle.get_signed_pre_key_public());
-        // DH4 = DH(EKa, OPKb) - A's Ephemeral Key and B's One-Time Pre-Key (if available)
-        let mut dh4_opt = b_bundle
+        // DH1 = DH(IKa, SPKb)
+        let dh1 = a_identity.dh(&b_bundle.get_signed_pre_key_public());
+        // DH2 = DH(EKa, IKb)
+        let dh2 = a_ephemeral.dh(&b_bundle.get_identity_key_public());
+        // DH3 = DH(EKa, SPKb)
+        let dh3 = a_ephemeral.dh(&b_bundle.get_signed_pre_key_public());
+        // DH4 = DH(EKa, OPKb)
+        let dh4_opt = b_bundle
             .get_one_time_pre_key_public()
             .map(|opk| a_ephemeral.dh(&opk));
 
         let a_ephemeral_public = a_ephemeral.public_key();
 
-        // Combine DH outputs to produce the shared secret
         let result =
-            self.calculate_shared_secret(&dh1, &dh2, &dh3, dh4_opt.as_ref(), &a_ephemeral_public)?;
-
-        dh1.zeroize();
-        dh2.zeroize();
-        dh3.zeroize();
-        dh4_opt.zeroize();
+            self.calculate_shared_secret(dh1, dh2, dh3, dh4_opt, &a_ephemeral_public)?;
 
         Ok(result)
     }
@@ -106,13 +99,13 @@ impl X3DH {
         a_identity_public: &PublicKey,
         a_ephemeral_public: &PublicKey,
     ) -> Result<[u8; 32], Error> {
-        // DH1 = DH(SPKb, IKa) - B's Signed Pre-Key and A's Identity Key
-        let mut dh1 = b_signed_pre_key.dh(a_identity_public);
-        // DH2 = DH(IKb, EKa) - B's Identity Key and A's Ephemeral Key
-        let mut dh2 = b_identity.dh(a_ephemeral_public);
-        // DH3 = DH(SPKb, EKa) - B's Signed Pre-Key and A's Ephemeral Key
-        let mut dh3 = b_signed_pre_key.dh(a_ephemeral_public);
-        // DH4 = DH(OPKb, EKa) - B's One-Time Pre-Key and A's Ephemeral Key
+        // DH1 = DH(SPKb, IKa)
+        let dh1 = b_signed_pre_key.dh(a_identity_public);
+        // DH2 = DH(IKb, EKa)
+        let dh2 = b_identity.dh(a_ephemeral_public);
+        // DH3 = DH(SPKb, EKa)
+        let dh3 = b_signed_pre_key.dh(a_ephemeral_public);
+        // DH4 = DH(OPKb, EKa)
         let dh4_opt: Option<Result<[u8; 32], Error>> = b_one_time_pre_key.map(|opk| {
             let result = opk.dh(a_ephemeral_public).map_err(|_| {
                 Error::PreKey("Error performing DH with one-time pre-key".to_string())
@@ -120,38 +113,38 @@ impl X3DH {
             Ok(result)
         });
 
-        let mut dh4 = match dh4_opt {
+        let dh4 = match dh4_opt {
             Some(result) => Some(result?),
             None => None,
         };
 
         let result =
-            self.calculate_shared_secret(&dh1, &dh2, &dh3, dh4.as_ref(), a_ephemeral_public)?;
-
-        dh1.zeroize();
-        dh2.zeroize();
-        dh3.zeroize();
-        dh4.zeroize();
+            self.calculate_shared_secret(dh1, dh2, dh3, dh4, a_ephemeral_public)?;
 
         Ok(result.shared_secret)
     }
 
     fn calculate_shared_secret(
         &self,
-        dh1: &[u8; 32],
-        dh2: &[u8; 32],
-        dh3: &[u8; 32],
-        dh4: Option<&[u8; 32]>,
+        mut dh1: [u8; 32],
+        mut dh2: [u8; 32],
+        mut dh3: [u8; 32],
+        mut dh4: Option<[u8; 32]>,
         ephemeral_public: &PublicKey,
     ) -> Result<X3DHResult, Error> {
         // IKM = DH1 || DH2 || DH3 || DH4 (if available)
         let mut key_material = Vec::new();
-        key_material.extend_from_slice(dh1);
-        key_material.extend_from_slice(dh2);
-        key_material.extend_from_slice(dh3);
+        key_material.extend_from_slice(&dh1);
+        key_material.extend_from_slice(&dh2);
+        key_material.extend_from_slice(&dh3);
         if let Some(dh4_bytes) = dh4 {
-            key_material.extend_from_slice(dh4_bytes);
+            key_material.extend_from_slice(dh4_bytes.as_ref());
         }
+
+        dh1.zeroize();
+        dh2.zeroize();
+        dh3.zeroize();
+        dh4.zeroize();
 
         let hkdf = Hkdf::<Sha256>::new(Some(SALT), &key_material);
 

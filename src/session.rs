@@ -39,14 +39,6 @@ impl Session {
         let message = RatchetMessage::from_bytes(ciphertext)?;
         self.ratchet.decrypt(message, associated_data)
     }
-
-    pub fn to_bytes(&self) -> Vec<u8> {
-        todo!()
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        todo!()
-    }
 }
 
 #[cfg(test)]

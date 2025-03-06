@@ -73,14 +73,10 @@ impl OneTimePreKey {
 
         result
     }
+}
 
-    // 4 bytes ID + 8 bytes timestamp + 1 byte used flag + 32 bytes key
-    pub fn from_bytes(bytes: &[u8; 45]) -> Self {
-        // if bytes.len() < 4 + 8 + 1 + 32 {
-        //     return Err(Error::Serde("Invalid one-time pre-key data length".to_string()));
-        // }
-
-        // Extract the ID
+impl From<[u8; 45]> for OneTimePreKey {
+    fn from(bytes: [u8; 45]) -> Self {
         let mut id_bytes = [0u8; 4];
         id_bytes.copy_from_slice(&bytes[0..4]);
         let id = u32::from_be_bytes(id_bytes);
@@ -197,17 +193,13 @@ mod tests {
         assert_eq!(serialized.len(), 4 + 8 + 1 + 32);
 
         // Deserialize and check if it matches
-        let deserialized_key = OneTimePreKey::from_bytes(&serialized);
+        let deserialized_key = OneTimePreKey::from(serialized);
         assert_eq!(deserialized_key.get_id(), original_key.get_id());
         assert_eq!(deserialized_key.is_used(), original_key.is_used());
         assert_eq!(
             deserialized_key.get_public_key().as_bytes(),
             original_key.get_public_key().as_bytes()
         );
-
-        // Test with invalid data
-        // let invalid_data = vec![0; 20]; // Too short
-        // assert!(OneTimePreKey::from_bytes(&invalid_data).is_err());
     }
 
     #[test]

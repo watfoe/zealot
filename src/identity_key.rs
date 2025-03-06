@@ -72,8 +72,10 @@ impl IdentityKey {
 
         bytes
     }
+}
 
-    pub fn from_bytes(bytes: &[u8; 64]) -> Self {
+impl From<[u8; 64]> for IdentityKey {
+    fn from(bytes: [u8; 64]) -> Self {
         let mut private_sk_bytes = [0u8; 32];
         private_sk_bytes.copy_from_slice(&bytes[0..32]);
         let signing_key_private = SecretKey::from(private_sk_bytes);
@@ -151,7 +153,7 @@ mod tests {
         assert_eq!(serialized.len(), 64);
 
         // Deserialize back to an identity key
-        let deserialized_key = IdentityKey::from_bytes(&serialized);
+        let deserialized_key = IdentityKey::from(serialized);
 
         // Ensure the keys match after round-trip serialization
         assert_eq!(

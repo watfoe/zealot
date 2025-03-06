@@ -172,9 +172,6 @@ impl Account {
         let engine = base64::engine::general_purpose::STANDARD;
         engine.encode(&bytes)
     }
-
-    // Serialization/deserialization methods for persistence
-    // ...
 }
 
 #[cfg(test)]

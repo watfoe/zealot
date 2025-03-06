@@ -20,7 +20,10 @@ mod error;
 pub use error::Error;
 
 mod account;
-mod config;
-mod session;
+pub use account::Account;
 
+mod config;
+pub use config::AccountConfig;
+
+mod session;
 pub use session::*;

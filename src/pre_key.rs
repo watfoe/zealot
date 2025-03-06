@@ -68,8 +68,11 @@ impl SignedPreKey {
 
         result
     }
+}
 
-    pub fn from_bytes(bytes: &[u8; 44]) -> Self {
+impl From<[u8; 44]> for SignedPreKey {
+    /// Load a signed pre key from a byte array.
+    fn from(bytes: [u8; 44]) -> Self {
         // Extract the ID
         let mut id_bytes = [0u8; 4];
         id_bytes.copy_from_slice(&bytes[0..4]);
@@ -177,7 +180,7 @@ mod tests {
         assert_eq!(serialized.len(), 44);
 
         // Deserialize and check if it matches
-        let deserialized_key = SignedPreKey::from_bytes(&serialized);
+        let deserialized_key = SignedPreKey::from(serialized);
         assert_eq!(deserialized_key.get_id(), original_key.get_id());
         assert_eq!(
             deserialized_key.get_public_key().as_bytes(),
