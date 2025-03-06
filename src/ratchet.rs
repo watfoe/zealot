@@ -72,7 +72,7 @@ impl Chain {
     }
 
     fn to_bytes(&self) -> [u8; 36] {
-       let mut bytes = [0u8; 36];
+        let mut bytes = [0u8; 36];
         bytes[0..4].copy_from_slice(&self.index.to_be_bytes());
         bytes[4..36].copy_from_slice(&self.chain_key);
 
@@ -89,9 +89,8 @@ impl Chain {
 
         Chain {
             index,
-            chain_key: ck_bytes
+            chain_key: ck_bytes,
         }
-
     }
 }
 
@@ -152,18 +151,14 @@ impl Drop for DoubleRatchet {
 impl DoubleRatchet {
     /// Initialize a ratchet as the first sender (Alice)
     pub fn initialize_as_first_sender(
-        shared_secret: &[u8],
+        shared_secret: [u8; 32],
         receiver_public_key: &PublicKey,
     ) -> Self {
         let dh_pair = StaticSecret::from(generate_random_seed().unwrap());
 
-        // Create root key from the shared secret
-        let mut root_key = [0u8; 32];
-        root_key.copy_from_slice(&shared_secret[0..32]); // Use first 32 bytes
-
         // Perform initial DH and KDF
         let dh_output = dh_pair.diffie_hellman(receiver_public_key);
-        let (new_root_key, chain_key) = Self::kdf_rk(&root_key, dh_output);
+        let (new_root_key, chain_key) = Self::kdf_rk(&shared_secret, dh_output);
 
         // Initialize chains
         let sending_chain = Chain::new(chain_key);
@@ -184,10 +179,10 @@ impl DoubleRatchet {
     }
 
     /// Initialize a ratchet as the first receiver (Bob)
-    pub fn initialize_as_first_receiver(shared_secret: &[u8], own_dh_pair: StaticSecret) -> Self {
-        let mut root_key = [0u8; 32];
-        root_key.copy_from_slice(&shared_secret[0..32]); // Use first 32 bytes
-
+    pub fn initialize_as_first_receiver(
+        shared_secret: [u8; 32],
+        own_dh_pair: StaticSecret,
+    ) -> Self {
         // Empty chains - will be populated on first message
         let sending_chain = Chain::new([0u8; 32]);
         let receiving_chain = Chain::new([0u8; 32]);
@@ -195,7 +190,7 @@ impl DoubleRatchet {
         Self {
             dh_pair: own_dh_pair,
             dh_remote_public: None, // Will be set when first message arrives
-            root_key,
+            root_key: shared_secret,
             sending_chain,
             receiving_chain,
             previous_sending_chain_length: 0,
@@ -459,10 +454,10 @@ mod tests {
 
         // Initialize ratchets
         let alice_ratchet =
-            DoubleRatchet::initialize_as_first_sender(&shared_secret, &bob_spk.get_public_key());
+            DoubleRatchet::initialize_as_first_sender(shared_secret, &bob_spk.get_public_key());
 
         let bob_ratchet =
-            DoubleRatchet::initialize_as_first_receiver(&shared_secret, bob_spk.get_key_pair());
+            DoubleRatchet::initialize_as_first_receiver(shared_secret, bob_spk.get_key_pair());
 
         (alice_ratchet, bob_ratchet)
     }
@@ -624,7 +619,7 @@ mod tests {
         let alice_public_key = alice_x3dh_result.get_public_key();
         // 4. Alice initializes her Double Ratchet with the shared secret
         let mut alice_ratchet = DoubleRatchet::initialize_as_first_sender(
-            &alice_x3dh_result.get_shared_secret(),
+            alice_x3dh_result.get_shared_secret(),
             &bob_bundle.get_signed_pre_key_public(),
         );
         // 5. Bob processes Alice's initiation
@@ -639,7 +634,7 @@ mod tests {
             .unwrap();
         // 6. Bob initializes his Double Ratchet with the shared secret
         let mut bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
-            &bob_shared_secret,
+            bob_shared_secret,
             bob_signed_pre_key.get_key_pair(),
         );
         // 7. Test message exchange

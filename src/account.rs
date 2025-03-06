@@ -9,7 +9,6 @@ use x25519_dalek::PublicKey;
 
 pub struct Account {
     ik: IdentityKey,
-
     spk: SignedPreKey,
     spk_last_rotation: std::time::SystemTime,
     otpk_store: OneTimePreKeyStore,
@@ -62,7 +61,7 @@ impl Account {
         );
 
         let ratchet = DoubleRatchet::initialize_as_first_sender(
-            &x3dh_result.get_shared_secret(),
+            x3dh_result.get_shared_secret(),
             &their_bundle.get_signed_pre_key_public(),
         );
 
@@ -107,12 +106,12 @@ impl Account {
             their_ephemeral_key,
         )?;
 
-        // Create a unique session ID
-        let session_id = self.derive_session_id(their_ik, their_ephemeral_key);
-
         // Initialize Double Ratchet
         let ratchet =
-            DoubleRatchet::initialize_as_first_receiver(&shared_secret, self.spk.get_key_pair());
+            DoubleRatchet::initialize_as_first_receiver(shared_secret, self.spk.get_key_pair());
+
+        // Create a unique session ID
+        let session_id = self.derive_session_id(their_ik, their_ephemeral_key);
 
         // Create and store the session
         let session = Session::new(session_id.clone(), ratchet, false);
@@ -180,9 +179,9 @@ impl Account {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
     use crate::account::Account;
     use crate::config::AccountConfig;
+    use std::time::Duration;
 
     #[test]
     fn test_account_creation() {
@@ -207,8 +206,14 @@ mod tests {
         let account = Account::new(Some(custom_config.clone()));
         let loaded_config = account.get_config();
 
-        assert_eq!(loaded_config.max_skipped_messages, custom_config.max_skipped_messages);
-        assert_eq!(loaded_config.min_one_time_pre_keys, custom_config.min_one_time_pre_keys);
+        assert_eq!(
+            loaded_config.max_skipped_messages,
+            custom_config.max_skipped_messages
+        );
+        assert_eq!(
+            loaded_config.min_one_time_pre_keys,
+            custom_config.min_one_time_pre_keys
+        );
     }
 
     #[test]
@@ -219,10 +224,16 @@ mod tests {
         let (bundle, one_time_keys) = account.get_key_bundle();
 
         // Verify bundle properties
-        assert!(bundle.verify().is_ok(), "Key bundle should have valid signature");
+        assert!(
+            bundle.verify().is_ok(),
+            "Key bundle should have valid signature"
+        );
 
         // Verify one-time keys
-        assert!(!one_time_keys.is_empty(), "Should have generated one-time pre keys");
+        assert!(
+            !one_time_keys.is_empty(),
+            "Should have generated one-time pre keys"
+        );
     }
 
     #[test]
@@ -274,6 +285,9 @@ mod tests {
         let (new_bundle, _) = account.get_key_bundle();
         let new_spk_id = new_bundle.get_signed_pre_id();
 
-        assert_ne!(initial_spk_id, new_spk_id, "Signed pre-key should have been rotated");
+        assert_ne!(
+            initial_spk_id, new_spk_id,
+            "Signed pre-key should have been rotated"
+        );
     }
 }

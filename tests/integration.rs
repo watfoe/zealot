@@ -35,7 +35,7 @@ mod integration_tests {
         // Step 6: Alice initializes her Double Ratchet
         println!("Step 6: Alice initializes Double Ratchet...");
         let mut alice_ratchet = DoubleRatchet::initialize_as_first_sender(
-            &alice_x3dh_result.get_shared_secret(),
+            alice_x3dh_result.get_shared_secret(),
             &bob_bundle.get_signed_pre_key_public(),
         );
 
@@ -67,7 +67,7 @@ mod integration_tests {
         // Step 9: Bob initializes his Double Ratchet with the shared secret
         println!("Step 9: Bob initializes Double Ratchet...");
         let mut bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
-            &bob_shared_secret,
+            bob_shared_secret,
             bob_signed_pre_key.get_key_pair(),
         );
 
@@ -232,12 +232,12 @@ mod integration_tests {
 
         // Alice initializes Double Ratchet sessions
         let mut alice_bob_ratchet = DoubleRatchet::initialize_as_first_sender(
-            &alice_bob_x3dh.get_shared_secret(),
+            alice_bob_x3dh.get_shared_secret(),
             &bob_bundle.get_signed_pre_key_public(),
         );
 
         let mut alice_charlie_ratchet = DoubleRatchet::initialize_as_first_sender(
-            &alice_charlie_x3dh.get_shared_secret(),
+            alice_charlie_x3dh.get_shared_secret(),
             &charlie_bundle.get_signed_pre_key_public(),
         );
 
@@ -264,12 +264,12 @@ mod integration_tests {
 
         // Bob and Charlie initialize Double Ratchet sessions
         let mut bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
-            &bob_shared_secret,
+            bob_shared_secret,
             bob_signed_pre_key.get_key_pair(),
         );
 
         let mut charlie_ratchet = DoubleRatchet::initialize_as_first_receiver(
-            &charlie_shared_secret,
+            charlie_shared_secret,
             charlie_signed_pre_key.get_key_pair(),
         );
 
@@ -347,7 +347,7 @@ mod integration_tests {
 
         // Alice initializes Double Ratchet session
         let mut alice_ratchet = DoubleRatchet::initialize_as_first_sender(
-            &alice_bob_x3dh.get_shared_secret(),
+            alice_bob_x3dh.get_shared_secret(),
             &bob_bundle.get_signed_pre_key_public(),
         );
 
@@ -364,7 +364,7 @@ mod integration_tests {
 
         // Bob initializes Double Ratchet session
         let mut bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
-            &bob_shared_secret,
+            bob_shared_secret,
             bob_signed_pre_key.get_key_pair(),
         );
 
@@ -411,7 +411,7 @@ mod integration_tests {
 
         // Alice creates a new ratchet session
         let mut alice_new_ratchet = DoubleRatchet::initialize_as_first_sender(
-            &alice_new_x3dh.get_shared_secret(),
+            alice_new_x3dh.get_shared_secret(),
             &bob_new_bundle.get_signed_pre_key_public(),
         );
 
@@ -428,7 +428,7 @@ mod integration_tests {
 
         // Bob initializes a new ratchet session
         let mut bob_new_ratchet = DoubleRatchet::initialize_as_first_receiver(
-            &bob_new_shared_secret,
+            bob_new_shared_secret,
             bob_new_signed_pre_key.get_key_pair(),
         );
 

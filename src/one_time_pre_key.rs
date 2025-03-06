@@ -1,8 +1,8 @@
+use crate::Error;
 use rand::TryRngCore;
 use rand::rngs::OsRng;
 use std::collections::HashMap;
 use x25519_dalek::{PublicKey, StaticSecret};
-use crate::Error;
 
 #[derive(Clone)]
 pub struct OneTimePreKey {

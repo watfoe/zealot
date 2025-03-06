@@ -34,7 +34,7 @@ impl Drop for EphemeralKey {
 }
 
 pub struct X3DHResult {
-    shared_secret: Vec<u8>,
+    shared_secret: [u8; 32],
     ephemeral_public: PublicKey, // A's ephemeral public key (sent to B)
 }
 
@@ -43,7 +43,7 @@ impl X3DHResult {
         self.ephemeral_public
     }
 
-    pub fn get_shared_secret(self) -> Vec<u8> {
+    pub fn get_shared_secret(self) -> [u8; 32] {
         self.shared_secret
     }
 }
@@ -105,7 +105,7 @@ impl X3DH {
         b_one_time_pre_key: Option<OneTimePreKey>,
         a_identity_public: &PublicKey,
         a_ephemeral_public: &PublicKey,
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<[u8; 32], Error> {
         // DH1 = DH(SPKb, IKa) - B's Signed Pre-Key and A's Identity Key
         let mut dh1 = b_signed_pre_key.dh(a_identity_public);
         // DH2 = DH(IKb, EKa) - B's Identity Key and A's Ephemeral Key
@@ -157,7 +157,7 @@ impl X3DH {
 
         key_material.zeroize();
 
-        let mut shared_secret = vec![0u8; 42]; // 256-bit shared secret
+        let mut shared_secret = [0u8; 32];
         hkdf.expand(&self.info, &mut shared_secret)
             .map_err(|_| Error::Crypto("HKDF expansion failed".to_string()))?;
 
@@ -289,6 +289,6 @@ mod tests {
         let x3dh = X3DH::new(b"Test-Protocol-Info");
         let alice_result = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
 
-        assert_eq!(alice_result.shared_secret.len(), 42);
+        assert_eq!(alice_result.shared_secret.len(), 32);
     }
 }

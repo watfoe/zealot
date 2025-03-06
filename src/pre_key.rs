@@ -1,4 +1,4 @@
-use crate::{Error, IdentityKey, OneTimePreKey};
+use crate::{IdentityKey, OneTimePreKey};
 use ed25519_dalek::Verifier;
 use rand::TryRngCore;
 use rand::rngs::OsRng;
@@ -49,11 +49,11 @@ impl SignedPreKey {
         self.get_public_key().to_bytes()
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut result = Vec::new();
+    pub fn to_bytes(&self) -> [u8; 44] {
+        let mut result = [0u8; 44];
 
         // Add the ID (4 bytes)
-        result.extend_from_slice(&self.id.to_be_bytes());
+        result[0..4].copy_from_slice(&self.id.to_be_bytes());
 
         // Add the creation timestamp
         let timestamp = self
@@ -61,19 +61,15 @@ impl SignedPreKey {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        result.extend_from_slice(&timestamp.to_be_bytes());
+        result[4..12].copy_from_slice(&timestamp.to_be_bytes());
 
         // Add the key bytes
-        result.extend_from_slice(self.pre_key.as_bytes());
+        result[12..44].copy_from_slice(self.pre_key.as_bytes());
 
         result
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() < 12 + 32 {
-            return Err(Error::Serde("Invalid pre-key data length".to_string()));
-        }
-
+    pub fn from_bytes(bytes: &[u8; 44]) -> Self {
         // Extract the ID
         let mut id_bytes = [0u8; 4];
         id_bytes.copy_from_slice(&bytes[0..4]);
@@ -90,11 +86,11 @@ impl SignedPreKey {
         key_bytes.copy_from_slice(&bytes[12..44]);
         let pre_key = StaticSecret::from(key_bytes);
 
-        Ok(Self {
+        Self {
             pre_key,
             id,
             created_at,
-        })
+        }
     }
 }
 
@@ -175,22 +171,18 @@ mod tests {
     #[test]
     fn test_pre_key_serialization() {
         let original_key = SignedPreKey::new(42);
-        let serialized = original_key.serialize();
+        let serialized = original_key.to_bytes();
 
         // Ensure we have enough bytes (4 for ID, 8 for timestamp, 32 for key)
         assert_eq!(serialized.len(), 44);
 
         // Deserialize and check if it matches
-        let deserialized_key = SignedPreKey::deserialize(&serialized).unwrap();
+        let deserialized_key = SignedPreKey::from_bytes(&serialized);
         assert_eq!(deserialized_key.get_id(), original_key.get_id());
         assert_eq!(
             deserialized_key.get_public_key().as_bytes(),
             original_key.get_public_key().as_bytes()
         );
-
-        // Test invalid data
-        let invalid_data = vec![0; 20]; // Too short
-        assert!(SignedPreKey::deserialize(&invalid_data).is_err());
     }
 
     #[test]

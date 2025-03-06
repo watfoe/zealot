@@ -1,6 +1,6 @@
 use crate::{DoubleRatchet, Error, RatchetMessage};
 
-// Session management
+/// Session management
 pub struct Session {
     session_id: String,
     ratchet: DoubleRatchet,
@@ -51,7 +51,9 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use crate::{DoubleRatchet, IdentityKey, OneTimePreKey, PreKeyBundle, Session, SignedPreKey, X3DH};
+    use crate::{
+        DoubleRatchet, IdentityKey, OneTimePreKey, PreKeyBundle, Session, SignedPreKey, X3DH,
+    };
 
     // Helper function to set up a test session pair
     fn create_session_pair() -> (Session, Session) {
@@ -75,7 +77,7 @@ mod tests {
 
         // Alice initializes her Double Ratchet
         let alice_ratchet = DoubleRatchet::initialize_as_first_sender(
-            &alice_x3dh_result.get_shared_secret(),
+            alice_x3dh_result.get_shared_secret(),
             &bob_bundle.get_signed_pre_key_public(),
         );
 
@@ -96,7 +98,7 @@ mod tests {
 
         // Bob initializes his Double Ratchet
         let bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
-            &bob_shared_secret,
+            bob_shared_secret,
             bob_signed_pre_key.get_key_pair(),
         );
 
@@ -114,7 +116,9 @@ mod tests {
         // Alice encrypts a message for Bob
         let message = "Hello Bob, this is a secure message!";
         let associated_data = b"session-1";
-        let encrypted = alice_session.encrypt(message.as_bytes(), associated_data).unwrap();
+        let encrypted = alice_session
+            .encrypt(message.as_bytes(), associated_data)
+            .unwrap();
 
         // Bob decrypts Alice's message
         let decrypted = bob_session.decrypt(&encrypted, associated_data).unwrap();
@@ -122,10 +126,14 @@ mod tests {
 
         // Bob responds to Alice
         let response = "Hello Alice, I received your message!";
-        let encrypted_response = bob_session.encrypt(response.as_bytes(), associated_data).unwrap();
+        let encrypted_response = bob_session
+            .encrypt(response.as_bytes(), associated_data)
+            .unwrap();
 
         // Alice decrypts Bob's response
-        let decrypted_response = alice_session.decrypt(&encrypted_response, associated_data).unwrap();
+        let decrypted_response = alice_session
+            .decrypt(&encrypted_response, associated_data)
+            .unwrap();
         assert_eq!(String::from_utf8(decrypted_response).unwrap(), response);
     }
 
@@ -138,14 +146,20 @@ mod tests {
         for i in 1..10 {
             // Alice to Bob
             let message = format!("Message {} from Alice", i);
-            let encrypted = alice_session.encrypt(message.as_bytes(), associated_data).unwrap();
+            let encrypted = alice_session
+                .encrypt(message.as_bytes(), associated_data)
+                .unwrap();
             let decrypted = bob_session.decrypt(&encrypted, associated_data).unwrap();
             assert_eq!(String::from_utf8(decrypted).unwrap(), message);
 
             // Bob to Alice
             let response = format!("Response {} from Bob", i);
-            let encrypted_response = bob_session.encrypt(response.as_bytes(), associated_data).unwrap();
-            let decrypted_response = alice_session.decrypt(&encrypted_response, associated_data).unwrap();
+            let encrypted_response = bob_session
+                .encrypt(response.as_bytes(), associated_data)
+                .unwrap();
+            let decrypted_response = alice_session
+                .decrypt(&encrypted_response, associated_data)
+                .unwrap();
             assert_eq!(String::from_utf8(decrypted_response).unwrap(), response);
         }
     }
@@ -157,7 +171,9 @@ mod tests {
         // Alice encrypts a message with specific associated data
         let message = "Secret message with special AD";
         let associated_data_1 = b"special-context-1";
-        let encrypted = alice_session.encrypt(message.as_bytes(), associated_data_1).unwrap();
+        let encrypted = alice_session
+            .encrypt(message.as_bytes(), associated_data_1)
+            .unwrap();
 
         // Bob tries to decrypt with wrong associated data
         let associated_data_2 = b"different-context";
@@ -185,6 +201,10 @@ mod tests {
         unique_ids.sort();
         unique_ids.dedup();
 
-        assert_eq!(unique_ids.len(), session_ids.len(), "Session IDs should be unique");
+        assert_eq!(
+            unique_ids.len(),
+            session_ids.len(),
+            "Session IDs should be unique"
+        );
     }
 }
