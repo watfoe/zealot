@@ -1,9 +1,9 @@
+use crate::Error;
 use ed25519_dalek::Signer;
 use ed25519_dalek::{SecretKey, SigningKey, Verifier, ed25519};
-use rand::rngs::OsRng;
 use rand::TryRngCore;
+use rand::rngs::OsRng;
 use x25519_dalek::StaticSecret;
-use crate::Error;
 
 pub fn generate_random_seed() -> Result<[u8; 32], Error> {
     let mut seed = [0u8; 32];
@@ -65,19 +65,15 @@ impl IdentityKey {
         self.dh_key.diffie_hellman(public_key).to_bytes()
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
-        // Combine private keys into a single bytearray
-        let mut bytes = Vec::with_capacity(64);
-        bytes.extend_from_slice(self.signing_key.as_bytes().as_slice());
-        bytes.extend_from_slice(self.dh_key.as_bytes());
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let mut bytes = [0u8; 64];
+        bytes[0..32].copy_from_slice(self.signing_key.as_bytes().as_slice());
+        bytes[32..64].copy_from_slice(self.dh_key.as_bytes());
+
         bytes
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() != 64 {
-            return Err(Error::Serde("Invalid identity key length".to_string()));
-        }
-
+    pub fn from_bytes(bytes: &[u8; 64]) -> Self {
         let mut private_sk_bytes = [0u8; 32];
         private_sk_bytes.copy_from_slice(&bytes[0..32]);
         let signing_key_private = SecretKey::from(private_sk_bytes);
@@ -87,10 +83,10 @@ impl IdentityKey {
         private_dh_bytes.copy_from_slice(&bytes[32..64]);
         let dh_key = StaticSecret::from(private_dh_bytes);
 
-        Ok(Self {
+        Self {
             signing_key,
             dh_key,
-        })
+        }
     }
 }
 
@@ -149,13 +145,13 @@ mod tests {
     #[test]
     fn test_serialization_deserialization() {
         let original_key = IdentityKey::new();
-        let serialized = original_key.serialize();
+        let serialized = original_key.to_bytes();
 
         // Ensure serialized data has the expected length
         assert_eq!(serialized.len(), 64);
 
         // Deserialize back to an identity key
-        let deserialized_key = IdentityKey::deserialize(&serialized).unwrap();
+        let deserialized_key = IdentityKey::from_bytes(&serialized);
 
         // Ensure the keys match after round-trip serialization
         assert_eq!(
@@ -166,10 +162,6 @@ mod tests {
             original_key.dh_key.as_bytes(),
             deserialized_key.dh_key.as_bytes()
         );
-
-        // Test with invalid length
-        let invalid_data = vec![0; 32]; // Too short
-        assert!(IdentityKey::deserialize(&invalid_data).is_err());
     }
 
     #[test]

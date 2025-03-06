@@ -1,7 +1,7 @@
-use crate::{IdentityKey, OneTimePreKey};
+use crate::{Error, IdentityKey, OneTimePreKey};
 use ed25519_dalek::Verifier;
-use rand::rngs::OsRng;
 use rand::TryRngCore;
+use rand::rngs::OsRng;
 use x25519_dalek::StaticSecret;
 
 pub struct SignedPreKey {
@@ -69,10 +69,9 @@ impl SignedPreKey {
         result
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.len() < 12 + 32 {
-            // 4 bytes ID + 8 bytes timestamp + 32 bytes key
-            return Err("Invalid pre-key data length");
+            return Err(Error::Serde("Invalid pre-key data length".to_string()));
         }
 
         // Extract the ID
@@ -84,7 +83,6 @@ impl SignedPreKey {
         let mut timestamp_bytes = [0u8; 8];
         timestamp_bytes.copy_from_slice(&bytes[4..12]);
         let timestamp = u64::from_be_bytes(timestamp_bytes);
-
         let created_at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(timestamp);
 
         // Extract the key

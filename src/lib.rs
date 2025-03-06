@@ -19,7 +19,8 @@ pub use ratchet::*;
 mod error;
 pub use error::Error;
 
-mod session;
 mod account;
+mod config;
+mod session;
 
 pub use session::*;

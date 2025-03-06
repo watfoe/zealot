@@ -1,5 +1,6 @@
 use crate::error::Error;
 use crate::generate_random_seed;
+use crate::ratchet_message::{MessageHeader, RatchetMessage};
 use aes_gcm::KeyInit;
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -10,7 +11,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 use zeroize::Zeroize;
-use crate::ratchet_message::{MessageHeader, RatchetMessage};
 
 const ROOT_KDF_INFO: &[u8] = b"Zealot-E2E-Info";
 
@@ -69,6 +69,29 @@ impl Chain {
 
     fn get_index(&self) -> u32 {
         self.index
+    }
+
+    fn to_bytes(&self) -> [u8; 36] {
+       let mut bytes = [0u8; 36];
+        bytes[0..4].copy_from_slice(&self.index.to_be_bytes());
+        bytes[4..36].copy_from_slice(&self.chain_key);
+
+        bytes
+    }
+
+    fn from_bytes(bytes: &[u8; 36]) -> Chain {
+        let mut index_bytes = [0u8; 4];
+        index_bytes.copy_from_slice(&bytes[..4]);
+        let index = u32::from_be_bytes(index_bytes);
+
+        let mut ck_bytes = [0u8; 32];
+        ck_bytes.copy_from_slice(&bytes[4..]);
+
+        Chain {
+            index,
+            chain_key: ck_bytes
+        }
+
     }
 }
 
@@ -422,10 +445,10 @@ impl DoubleRatchet {
 
 #[cfg(test)]
 mod tests {
-    use rand::rngs::OsRng;
-    use rand::TryRngCore;
     use super::*;
     use crate::{IdentityKey, OneTimePreKey, PreKeyBundle, SignedPreKey, X3DH};
+    use rand::TryRngCore;
+    use rand::rngs::OsRng;
 
     fn create_ratchets() -> (DoubleRatchet, DoubleRatchet) {
         let bob_spk = SignedPreKey::new(1);

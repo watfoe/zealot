@@ -3,7 +3,7 @@ use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
-use crate::{IdentityKey, OneTimePreKey, PreKeyBundle, SignedPreKey, generate_random_seed, Error};
+use crate::{Error, IdentityKey, OneTimePreKey, PreKeyBundle, SignedPreKey, generate_random_seed};
 
 const SALT: &[u8] = b"Zealot-E2E-NaCl";
 
@@ -114,9 +114,9 @@ impl X3DH {
         let mut dh3 = b_signed_pre_key.dh(a_ephemeral_public);
         // DH4 = DH(OPKb, EKa) - B's One-Time Pre-Key and A's Ephemeral Key
         let dh4_opt: Option<Result<[u8; 32], Error>> = b_one_time_pre_key.map(|opk| {
-            let result = opk
-                .dh(a_ephemeral_public)
-                .map_err(|_| Error::PreKey("Error performing DH with one-time pre-key".to_string()))?;
+            let result = opk.dh(a_ephemeral_public).map_err(|_| {
+                Error::PreKey("Error performing DH with one-time pre-key".to_string())
+            })?;
             Ok(result)
         });
 

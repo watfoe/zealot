@@ -1,7 +1,8 @@
-use std::collections::HashMap;
-use rand::rngs::OsRng;
 use rand::TryRngCore;
+use rand::rngs::OsRng;
+use std::collections::HashMap;
 use x25519_dalek::{PublicKey, StaticSecret};
+use crate::Error;
 
 #[derive(Clone)]
 pub struct OneTimePreKey {
@@ -41,19 +42,20 @@ impl OneTimePreKey {
         self.used = true;
     }
 
-    pub fn dh(self, public_key: &PublicKey) -> Result<[u8; 32], &'static str> {
+    pub fn dh(self, public_key: &PublicKey) -> Result<[u8; 32], Error> {
         if self.used {
-            return Err("Pre-key already used");
+            return Err(Error::PreKey("Pre-key already used".to_string()));
         }
 
         Ok(self.pre_key.diffie_hellman(public_key).to_bytes())
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut result = Vec::new();
+    /// Extract this one-time-key keys bytes for serialization.
+    pub fn to_bytes(&self) -> [u8; 45] {
+        let mut result = [0u8; 45];
 
         // Add the ID (4 bytes)
-        result.extend_from_slice(&self.id.to_be_bytes());
+        result[0..4].copy_from_slice(&self.id.to_be_bytes());
 
         // Add the creation timestamp (8 bytes)
         let timestamp = self
@@ -61,22 +63,22 @@ impl OneTimePreKey {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        result.extend_from_slice(&timestamp.to_be_bytes());
+        result[4..12].copy_from_slice(&timestamp.to_be_bytes());
 
         // Add the used flag (1 byte)
-        result.push(if self.used { 1 } else { 0 });
+        result[12..13].copy_from_slice(if self.used { &[0x1] } else { &[0] });
 
         // Add the key bytes (32 bytes)
-        result.extend_from_slice(self.pre_key.as_bytes());
+        result[13..45].copy_from_slice(self.pre_key.as_bytes());
 
         result
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() < 4 + 8 + 1 + 32 {
-            // 4 bytes ID + 8 bytes timestamp + 1 byte used flag + 32 bytes key
-            return Err("Invalid one-time pre-key data length");
-        }
+    // 4 bytes ID + 8 bytes timestamp + 1 byte used flag + 32 bytes key
+    pub fn from_bytes(bytes: &[u8; 45]) -> Self {
+        // if bytes.len() < 4 + 8 + 1 + 32 {
+        //     return Err(Error::Serde("Invalid one-time pre-key data length".to_string()));
+        // }
 
         // Extract the ID
         let mut id_bytes = [0u8; 4];
@@ -98,12 +100,12 @@ impl OneTimePreKey {
         key_bytes.copy_from_slice(&bytes[13..45]);
         let pre_key = StaticSecret::from(key_bytes);
 
-        Ok(Self {
+        Self {
             pre_key,
             id,
             created_at,
             used,
-        })
+        }
     }
 }
 
@@ -140,7 +142,9 @@ impl OneTimePreKeyStore {
 
     pub fn get_public_keys(&self) -> HashMap<u32, PublicKey> {
         let mut indexed_pks = HashMap::new();
-        self.keys.iter().for_each(|(idx, otpk)| {indexed_pks.insert(*idx, otpk.get_public_key());});
+        self.keys.iter().for_each(|(idx, otpk)| {
+            indexed_pks.insert(*idx, otpk.get_public_key());
+        });
 
         indexed_pks
     }
@@ -187,13 +191,13 @@ mod tests {
     #[test]
     fn test_one_time_pre_key_serialization() {
         let original_key = OneTimePreKey::new(123);
-        let serialized = original_key.serialize();
+        let serialized = original_key.to_bytes();
 
         // Ensure we have the right size
         assert_eq!(serialized.len(), 4 + 8 + 1 + 32);
 
         // Deserialize and check if it matches
-        let deserialized_key = OneTimePreKey::deserialize(&serialized).unwrap();
+        let deserialized_key = OneTimePreKey::from_bytes(&serialized);
         assert_eq!(deserialized_key.get_id(), original_key.get_id());
         assert_eq!(deserialized_key.is_used(), original_key.is_used());
         assert_eq!(
@@ -202,8 +206,8 @@ mod tests {
         );
 
         // Test with invalid data
-        let invalid_data = vec![0; 20]; // Too short
-        assert!(OneTimePreKey::deserialize(&invalid_data).is_err());
+        // let invalid_data = vec![0; 20]; // Too short
+        // assert!(OneTimePreKey::from_bytes(&invalid_data).is_err());
     }
 
     #[test]
