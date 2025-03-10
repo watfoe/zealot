@@ -22,8 +22,8 @@ pub enum Error {
     Serde(String),
 }
 
-impl From<aes_gcm::Error> for Error {
-    fn from(value: aes_gcm::Error) -> Self {
+impl From<aes_gcm_siv::Error> for Error {
+    fn from(value: aes_gcm_siv::Error) -> Self {
         Self::Crypto(value.to_string())
     }
 }

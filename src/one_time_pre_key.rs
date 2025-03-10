@@ -107,13 +107,13 @@ impl From<[u8; 45]> for OneTimePreKey {
 
 /// OneTimePreKey Manager
 pub struct OneTimePreKeyStore {
-    keys: HashMap<u32, OneTimePreKey>,
-    next_id: u32,
-    max_keys: usize,
+    pub(crate) keys: HashMap<u32, OneTimePreKey>,
+    pub(crate) next_id: u32,
+    pub(crate) max_keys: usize,
 }
 
 impl OneTimePreKeyStore {
-    pub fn new(max_keys: usize) -> Self {
+    pub(crate) fn new(max_keys: usize) -> Self {
         Self {
             keys: HashMap::new(),
             next_id: 1,
@@ -121,7 +121,7 @@ impl OneTimePreKeyStore {
         }
     }
 
-    pub fn generate_keys(&mut self, count: usize) -> Vec<u32> {
+    pub(crate) fn generate_keys(&mut self, count: usize) -> Vec<u32> {
         let mut ids = Vec::with_capacity(count);
         for _ in 0..count {
             let id = self.next_id;
@@ -132,11 +132,11 @@ impl OneTimePreKeyStore {
         ids
     }
 
-    pub fn get(&self, id: u32) -> Option<&OneTimePreKey> {
+    pub(crate) fn get(&self, id: u32) -> Option<&OneTimePreKey> {
         self.keys.get(&id)
     }
 
-    pub fn get_public_keys(&self) -> HashMap<u32, PublicKey> {
+    pub(crate) fn get_public_keys(&self) -> HashMap<u32, PublicKey> {
         let mut indexed_pks = HashMap::new();
         self.keys.iter().for_each(|(idx, otpk)| {
             indexed_pks.insert(*idx, otpk.get_public_key());
@@ -145,15 +145,15 @@ impl OneTimePreKeyStore {
         indexed_pks
     }
 
-    pub fn take(&mut self, id: u32) -> Option<OneTimePreKey> {
+    pub(crate) fn take(&mut self, id: u32) -> Option<OneTimePreKey> {
         self.keys.remove(&id)
     }
 
-    pub fn count(&self) -> usize {
+    pub(crate) fn count(&self) -> usize {
         self.keys.len()
     }
 
-    pub fn replenish(&mut self) -> Vec<u32> {
+    pub(crate) fn replenish(&mut self) -> Vec<u32> {
         let needed = self.max_keys.saturating_sub(self.keys.len());
         self.generate_keys(needed)
     }

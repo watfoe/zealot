@@ -8,12 +8,12 @@ use std::collections::HashMap;
 use x25519_dalek::PublicKey;
 
 pub struct Account {
-    ik: IdentityKey,
-    spk: SignedPreKey,
-    spk_last_rotation: std::time::SystemTime,
-    otpk_store: OneTimePreKeyStore,
-    sessions: HashMap<String, Session>, // session_id -> Session
-    config: AccountConfig,
+    pub ik: IdentityKey,
+    pub spk: SignedPreKey,
+    pub spk_last_rotation: std::time::SystemTime,
+    pub otpk_store: OneTimePreKeyStore,
+    pub sessions: HashMap<String, Session>, // session_id -> Session
+    pub config: AccountConfig,
 }
 
 impl Account {

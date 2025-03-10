@@ -30,3 +30,6 @@ pub(crate) mod state;
 
 mod session;
 pub use session::*;
+
+mod proto;
+pub use proto::*;

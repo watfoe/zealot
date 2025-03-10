@@ -2,11 +2,11 @@ use crate::{DoubleRatchet, Error, RatchetMessage};
 
 /// Session management
 pub struct Session {
-    session_id: String,
-    ratchet: DoubleRatchet,
-    created_at: std::time::SystemTime,
-    last_used_at: std::time::SystemTime,
-    is_initiator: bool,
+    pub(crate) session_id: String,
+    pub(crate) ratchet: DoubleRatchet,
+    pub(crate) created_at: std::time::SystemTime,
+    pub(crate) last_used_at: std::time::SystemTime,
+    pub(crate) is_initiator: bool,
 }
 
 impl Session {

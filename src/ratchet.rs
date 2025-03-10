@@ -3,9 +3,8 @@ use crate::error::Error;
 use crate::generate_random_seed;
 use crate::ratchet_message::{MessageHeader, RatchetMessage};
 use crate::state::RatchetState;
-use aes_gcm::KeyInit;
-use aes_gcm::aead::Aead;
-use aes_gcm::{Aes256Gcm, Nonce};
+use aes_gcm_siv::aead::Aead;
+use aes_gcm_siv::{Aes256GcmSiv, KeyInit, Nonce};
 use hkdf::Hkdf;
 use rand::TryRngCore;
 use sha2::Sha256;
@@ -13,8 +12,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 use zeroize::Zeroize;
-
-const ROOT_KDF_INFO: &[u8] = b"Zealot-E2E-Info";
 
 const NONCE_SIZE: usize = 12; // AES-GCM uses 12-byte (96-bit) nonces
 
@@ -36,10 +33,10 @@ where
 /// Double Ratchet implementation
 #[derive(Clone)]
 pub struct DoubleRatchet {
-    state: RatchetState,
-    // Map<encrypted_header: (message_number, header_key, message_key)>
-    skipped_message_keys: HashMap<([u8; 32], u32), [u8; 32]>,
-    max_skip: u32,
+    pub(crate) state: RatchetState,
+    // Map<(header_key, message_no): message_key>
+    pub(crate) skipped_message_keys: HashMap<([u8; 32], u32), [u8; 32]>,
+    pub(crate) max_skip: u32,
 }
 
 impl Default for DoubleRatchet {
@@ -202,8 +199,8 @@ impl DoubleRatchet {
                 .try_fill_bytes(&mut nonce)
                 .map_err(|_| Error::Random)?;
 
-            let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&hk);
-            let cipher = Aes256Gcm::new(key);
+            let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(&hk);
+            let cipher = Aes256GcmSiv::new(key);
             let nonce = Nonce::from_slice(&nonce);
 
             let mut ciphertext = cipher
@@ -288,8 +285,8 @@ impl DoubleRatchet {
         let nonce = &encrypted_header[0..12];
         let ciphertext = &encrypted_header[12..];
 
-        let key = aes_gcm::Key::<Aes256Gcm>::from_slice(hk);
-        let cipher = Aes256Gcm::new(key);
+        let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(hk);
+        let cipher = Aes256GcmSiv::new(key);
         let nonce = Nonce::from_slice(nonce);
 
         match cipher.decrypt(nonce, ciphertext) {
@@ -426,14 +423,14 @@ impl DoubleRatchet {
         nonce_bytes.copy_from_slice(&derived_material[64..64 + NONCE_SIZE]);
 
         // Use the encryption key for AES-GCM
-        let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&derived_material[0..32]);
-        let cipher = Aes256Gcm::new(key);
+        let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(&derived_material[0..32]);
+        let cipher = Aes256GcmSiv::new(key);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         cipher
             .encrypt(
                 nonce,
-                aes_gcm::aead::Payload {
+                aes_gcm_siv::aead::Payload {
                     msg: plaintext,
                     aad: associated_data,
                 },
@@ -457,13 +454,13 @@ impl DoubleRatchet {
         nonce_bytes.copy_from_slice(&derived_material[64..64 + NONCE_SIZE]);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let aes_key = aes_gcm::Key::<Aes256Gcm>::from_slice(&derived_material[0..32]);
-        let cipher = Aes256Gcm::new(aes_key);
+        let aes_key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(&derived_material[0..32]);
+        let cipher = Aes256GcmSiv::new(aes_key);
 
         cipher
             .decrypt(
                 nonce,
-                aes_gcm::aead::Payload {
+                aes_gcm_siv::aead::Payload {
                     msg: ciphertext,
                     aad: associated_data,
                 },

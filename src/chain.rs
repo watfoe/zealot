@@ -43,26 +43,8 @@ impl Chain {
         self.index
     }
 
-    pub(crate) fn to_bytes(&self) -> [u8; 36] {
-        let mut bytes = [0u8; 36];
-        bytes[0..4].copy_from_slice(&self.index.to_be_bytes());
-        bytes[4..36].copy_from_slice(&self.chain_key);
-
-        bytes
-    }
-
-    pub(crate) fn from_bytes(bytes: &[u8; 36]) -> Chain {
-        let mut index_bytes = [0u8; 4];
-        index_bytes.copy_from_slice(&bytes[..4]);
-        let index = u32::from_be_bytes(index_bytes);
-
-        let mut ck_bytes = [0u8; 32];
-        ck_bytes.copy_from_slice(&bytes[4..]);
-
-        Chain {
-            index,
-            chain_key: ck_bytes,
-        }
+    pub(crate) fn set_index(&mut self, index: u32) {
+        self.index = index;
     }
 }
 

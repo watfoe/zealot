@@ -1,0 +1,67 @@
+syntax = "proto3";
+package zealot;
+
+message AccountProto {
+    bytes identity_key = 1;
+    bytes signed_pre_key = 2;
+    uint64 spk_last_rotation = 3;
+    OneTimePreKeyStoreProto otpk_store = 4;
+    map<string, SessionProto> sessions = 5;
+    AccountConfigProto config = 6;
+    uint32 version = 7;
+}
+
+message OneTimePreKeyStoreProto {
+    uint32 next_id = 1;
+    uint32 max_keys = 2;
+    map<uint32, bytes> keys = 3;
+}
+
+message AccountConfigProto {
+    uint32 max_skipped_messages = 1;
+    uint64 signed_pre_key_rotation_interval_secs = 2;
+    uint32 min_one_time_pre_keys = 3;
+    uint32 max_one_time_pre_keys = 4;
+    bytes protocol_info = 5;
+    bytes kdf_info = 6;
+}
+
+message SessionProto {
+    string session_id = 1;
+    RatchetProto ratchet = 2;
+    uint64 created_at = 3;
+    uint64 last_used_at = 4;
+    bool is_initiator = 5;
+}
+
+message RatchetProto {
+    bytes dh_pair = 1;
+    RatchetStateProto state = 2;
+    repeated SkippedMessageKeyProto skipped_message_keys = 3;
+    uint32 max_skip = 4;
+}
+
+message SkippedMessageKeyProto {
+    bytes header_key = 1;
+    uint32 message_number = 2;
+    bytes message_key = 3;
+}
+
+message RatchetStateProto {
+    bytes dh_remote_public = 1;
+    bytes root_key = 2;
+    ChainProto sending_chain = 3;
+    ChainProto receiving_chain = 4;
+    uint32 previous_sending_chain_length = 5;
+    uint32 sending_message_number = 6;
+    uint32 receiving_message_number = 7;
+    bytes sending_header_key = 8;
+    bytes receiving_header_key = 9;
+    bytes next_sending_header_key = 10;
+    bytes next_receiving_header_key = 11;
+}
+
+message ChainProto {
+    bytes chain_key = 1;
+    uint32 index = 2;
+}
