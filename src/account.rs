@@ -18,7 +18,7 @@ pub struct Account {
 
 impl Account {
     pub fn new(config: Option<AccountConfig>) -> Self {
-        let config = config.unwrap_or(AccountConfig::default());
+        let config = config.unwrap_or_default();
 
         let ik = IdentityKey::new();
         let spk = SignedPreKey::new(1);
@@ -167,10 +167,10 @@ impl Account {
         // Add randomness to prevent session ID collisions
         let mut random = [0u8; 16];
         rand::rng().fill_bytes(&mut random);
-        hasher.update(&random);
+        hasher.update(random);
         let bytes = hasher.finalize();
         let engine = base64::engine::general_purpose::STANDARD;
-        engine.encode(&bytes)
+        engine.encode(bytes)
     }
 }
 

@@ -28,15 +28,21 @@ impl Session {
         self.session_id.clone()
     }
 
-    pub fn encrypt(&mut self, plaintext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, Error> {
+    pub fn encrypt(
+        &mut self,
+        plaintext: &[u8],
+        associated_data: &[u8],
+    ) -> Result<RatchetMessage, Error> {
         self.last_used_at = std::time::SystemTime::now();
-        let message = self.ratchet.encrypt(plaintext, associated_data)?;
-        Ok(message.to_bytes())
+        self.ratchet.encrypt(plaintext, associated_data)
     }
 
-    pub fn decrypt(&mut self, ciphertext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, Error> {
+    pub fn decrypt(
+        &mut self,
+        message: &RatchetMessage,
+        associated_data: &[u8],
+    ) -> Result<Vec<u8>, Error> {
         self.last_used_at = std::time::SystemTime::now();
-        let message = RatchetMessage::from_bytes(ciphertext)?;
         self.ratchet.decrypt(message, associated_data)
     }
 }
@@ -108,24 +114,22 @@ mod tests {
         // Alice encrypts a message for Bob
         let message = "Hello Bob, this is a secure message!";
         let associated_data = b"session-1";
-        let encrypted = alice_session
+        let erm = alice_session
             .encrypt(message.as_bytes(), associated_data)
             .unwrap();
 
         // Bob decrypts Alice's message
-        let decrypted = bob_session.decrypt(&encrypted, associated_data).unwrap();
+        let decrypted = bob_session.decrypt(&erm, associated_data).unwrap();
         assert_eq!(String::from_utf8(decrypted).unwrap(), message);
 
         // Bob responds to Alice
         let response = "Hello Alice, I received your message!";
-        let encrypted_response = bob_session
+        let erm = bob_session
             .encrypt(response.as_bytes(), associated_data)
             .unwrap();
 
         // Alice decrypts Bob's response
-        let decrypted_response = alice_session
-            .decrypt(&encrypted_response, associated_data)
-            .unwrap();
+        let decrypted_response = alice_session.decrypt(&erm, associated_data).unwrap();
         assert_eq!(String::from_utf8(decrypted_response).unwrap(), response);
     }
 
@@ -138,20 +142,18 @@ mod tests {
         for i in 1..10 {
             // Alice to Bob
             let message = format!("Message {} from Alice", i);
-            let encrypted = alice_session
+            let erm = alice_session
                 .encrypt(message.as_bytes(), associated_data)
                 .unwrap();
-            let decrypted = bob_session.decrypt(&encrypted, associated_data).unwrap();
+            let decrypted = bob_session.decrypt(&erm, associated_data).unwrap();
             assert_eq!(String::from_utf8(decrypted).unwrap(), message);
 
             // Bob to Alice
             let response = format!("Response {} from Bob", i);
-            let encrypted_response = bob_session
+            let erm = bob_session
                 .encrypt(response.as_bytes(), associated_data)
                 .unwrap();
-            let decrypted_response = alice_session
-                .decrypt(&encrypted_response, associated_data)
-                .unwrap();
+            let decrypted_response = alice_session.decrypt(&erm, associated_data).unwrap();
             assert_eq!(String::from_utf8(decrypted_response).unwrap(), response);
         }
     }
@@ -163,17 +165,17 @@ mod tests {
         // Alice encrypts a message with specific associated data
         let message = "Secret message with special AD";
         let associated_data_1 = b"special-context-1";
-        let encrypted = alice_session
+        let erm = alice_session
             .encrypt(message.as_bytes(), associated_data_1)
             .unwrap();
 
         // Bob tries to decrypt with wrong associated data
         let associated_data_2 = b"different-context";
-        let result = bob_session.decrypt(&encrypted, associated_data_2);
+        let result = bob_session.decrypt(&erm, associated_data_2);
         assert!(result.is_err(), "Decryption with wrong AD should fail");
 
         // Bob decrypts with correct associated data
-        let decrypted = bob_session.decrypt(&encrypted, associated_data_1).unwrap();
+        let decrypted = bob_session.decrypt(&erm, associated_data_1).unwrap();
         assert_eq!(String::from_utf8(decrypted).unwrap(), message);
     }
 

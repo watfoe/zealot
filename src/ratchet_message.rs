@@ -1,8 +1,7 @@
-use crate::Error;
 use x25519_dalek::PublicKey;
 
 /// Header for a ratchet message
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug)]
 pub struct MessageHeader {
     pub public_key: PublicKey,
     pub previous_chain_length: u32,
@@ -51,33 +50,17 @@ impl From<[u8; 40]> for MessageHeader {
 
 #[derive(Clone)]
 pub struct RatchetMessage {
-    pub header: MessageHeader,
+    pub header: Vec<u8>,
     pub ciphertext: Vec<u8>,
 }
 
 impl RatchetMessage {
     pub fn to_bytes(&self) -> Vec<u8> {
         // Format: [header][ciphertext]
-        let header_bytes = self.header.to_bytes();
-
-        let mut result = Vec::with_capacity(40 + self.ciphertext.len());
-        result.extend_from_slice(&header_bytes);
+        let mut result = Vec::with_capacity(self.header.len() + self.ciphertext.len());
+        result.extend_from_slice(&self.header);
         result.extend_from_slice(&self.ciphertext);
 
         result
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() < 40 {
-            return Err(Error::Protocol("Message too short".to_string()));
-        }
-
-        let mut header_bytes = [0u8; 40];
-        header_bytes.copy_from_slice(&bytes[0..40]);
-
-        let header = MessageHeader::from(header_bytes);
-        let ciphertext = bytes[40..].to_vec();
-
-        Ok(RatchetMessage { header, ciphertext })
     }
 }

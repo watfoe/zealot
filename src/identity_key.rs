@@ -24,8 +24,8 @@ pub struct IdentityKey {
     dh_key: StaticSecret,
 }
 
-impl IdentityKey {
-    pub fn new() -> Self {
+impl Default for IdentityKey {
+    fn default() -> Self {
         let seed = generate_random_seed().unwrap();
 
         let signing_key = generate_ed25519_signing_key(seed);
@@ -35,6 +35,12 @@ impl IdentityKey {
             signing_key,
             dh_key,
         }
+    }
+}
+
+impl IdentityKey {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     // Method to sign data using the identity key
@@ -48,7 +54,7 @@ impl IdentityKey {
         signature: &ed25519::Signature,
     ) -> Result<(), ed25519::Error> {
         let verifying_key = self.signing_key.verifying_key();
-        verifying_key.verify(message, &signature)
+        verifying_key.verify(message, signature)
     }
 
     // Get the public Ed25519 verifying key

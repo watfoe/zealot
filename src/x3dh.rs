@@ -11,11 +11,17 @@ pub struct EphemeralKey {
     key: StaticSecret,
 }
 
-impl EphemeralKey {
-    pub fn new() -> Self {
+impl Default for EphemeralKey {
+    fn default() -> Self {
         Self {
             key: StaticSecret::from(generate_random_seed().unwrap()),
         }
+    }
+}
+
+impl EphemeralKey {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn public_key(&self) -> PublicKey {
@@ -84,8 +90,7 @@ impl X3DH {
 
         let a_ephemeral_public = a_ephemeral.public_key();
 
-        let result =
-            self.calculate_shared_secret(dh1, dh2, dh3, dh4_opt, &a_ephemeral_public)?;
+        let result = self.calculate_shared_secret(dh1, dh2, dh3, dh4_opt, &a_ephemeral_public)?;
 
         Ok(result)
     }
@@ -118,8 +123,7 @@ impl X3DH {
             None => None,
         };
 
-        let result =
-            self.calculate_shared_secret(dh1, dh2, dh3, dh4, a_ephemeral_public)?;
+        let result = self.calculate_shared_secret(dh1, dh2, dh3, dh4, a_ephemeral_public)?;
 
         Ok(result.shared_secret)
     }
