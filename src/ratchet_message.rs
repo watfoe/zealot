@@ -1,4 +1,5 @@
 use x25519_dalek::PublicKey;
+use crate::Error;
 
 /// Header for a ratchet message
 #[derive(Clone, Debug)]
@@ -55,12 +56,31 @@ pub struct RatchetMessage {
 }
 
 impl RatchetMessage {
-    pub fn to_bytes(&self) -> Vec<u8> {
-        // Format: [header][ciphertext]
-        let mut result = Vec::with_capacity(self.header.len() + self.ciphertext.len());
+    pub fn to_bytes(self) -> Vec<u8> {
+        // Format: [header length][header][ciphertext]
+        let mut result = Vec::with_capacity(4 + self.header.len() + self.ciphertext.len());
+        let len = self.header.len() as u32;
+        result.extend_from_slice(&len.to_be_bytes());
         result.extend_from_slice(&self.header);
         result.extend_from_slice(&self.ciphertext);
 
         result
     }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        if bytes.len() < 4 {
+            return Err(Error::Protocol("Invalid message format".to_string()));
+        }
+
+        let header_len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+
+        if bytes.len() < 4 + header_len {
+            return Err(Error::Protocol("Invalid message format".to_string()));
+        }
+
+        Ok(Self {
+            header: bytes[4..4 + header_len].to_vec(),
+            ciphertext: bytes[4 + header_len..].to_vec()
+        })
+     }
 }
