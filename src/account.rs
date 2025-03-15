@@ -1,19 +1,20 @@
 use crate::config::AccountConfig;
 use crate::one_time_pre_key::OneTimePreKeyStore;
-use crate::{DoubleRatchet, Error, IdentityKey, PreKeyBundle, Session, SignedPreKey, X3DH};
+use crate::{
+    DoubleRatchet, Error, IdentityKey, PreKeyBundle, Session, SignedPreKey, X3DH, X25519PublicKey,
+};
 use base64::Engine;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use x25519_dalek::PublicKey;
 
 pub struct Account {
-    pub ik: IdentityKey,
-    pub spk: SignedPreKey,
-    pub spk_last_rotation: std::time::SystemTime,
-    pub otpk_store: OneTimePreKeyStore,
-    pub sessions: HashMap<String, Session>, // session_id -> Session
-    pub config: AccountConfig,
+    pub(crate) ik: IdentityKey,
+    pub(crate) spk: SignedPreKey,
+    pub(crate) spk_last_rotation: std::time::SystemTime,
+    pub(crate) otpk_store: OneTimePreKeyStore,
+    pub(crate) sessions: HashMap<String, Session>, // session_id -> Session
+    pub(crate) config: AccountConfig,
 }
 
 impl Account {
@@ -38,7 +39,7 @@ impl Account {
     }
 
     // Get the pre-key bundle for sharing with others
-    pub fn get_key_bundle(&mut self) -> (PreKeyBundle, HashMap<u32, PublicKey>) {
+    pub fn pre_key_bundle(&mut self) -> (PreKeyBundle, HashMap<u32, X25519PublicKey>) {
         self.maybe_rotate_spk();
         self.maybe_replenish_otpk_store();
 
@@ -47,22 +48,22 @@ impl Account {
         (PreKeyBundle::new(&self.ik, &self.spk, None), otpks)
     }
 
-    pub fn get_config(&self) -> AccountConfig {
+    pub fn config(&self) -> AccountConfig {
         self.config.clone()
     }
 
     pub fn initiate_session(&mut self, their_bundle: &PreKeyBundle) -> Result<String, Error> {
-        let x3dh = X3DH::new(b"Application-Specific-Info");
+        let x3dh = X3DH::new(&self.config.protocol_info);
         let x3dh_result = x3dh.initiate(&self.ik, their_bundle)?;
 
         let session_id = self.derive_session_id(
-            &their_bundle.get_identity_key_public(),
-            &x3dh_result.get_public_key(),
+            &their_bundle.public_identity_key(),
+            &x3dh_result.public_key(),
         );
 
         let ratchet = DoubleRatchet::initialize_as_first_sender(
-            x3dh_result.get_shared_secret(),
-            &their_bundle.get_signed_pre_key_public(),
+            x3dh_result.shared_secret(),
+            &their_bundle.public_signed_pre_key(),
         );
 
         let session = Session::new(session_id.clone(), ratchet, true);
@@ -75,13 +76,13 @@ impl Account {
     // Process an incoming session initiation
     pub fn process_session_initiation(
         &mut self,
-        their_ik: &PublicKey,
-        their_ephemeral_key: &PublicKey,
+        their_ik: &X25519PublicKey,
+        their_ephemeral_key: &X25519PublicKey,
         spk_id: u32,
         one_time_pre_key_id: Option<u32>,
     ) -> Result<String, Error> {
         // Verify we have the required keys
-        if self.spk.get_id() != spk_id {
+        if self.spk.id() != spk_id {
             return Err(Error::PreKey("Invalid signed pre-key ID".to_string()));
         }
 
@@ -97,7 +98,7 @@ impl Account {
         };
 
         // Process X3DH
-        let x3dh = X3DH::new(b"Application-Specific-Info");
+        let x3dh = X3DH::new(&self.config.protocol_info);
         let shared_secret = x3dh.process_initiation(
             &self.ik,
             &self.spk,
@@ -108,7 +109,7 @@ impl Account {
 
         // Initialize Double Ratchet
         let ratchet =
-            DoubleRatchet::initialize_as_first_receiver(shared_secret, self.spk.get_key_pair());
+            DoubleRatchet::initialize_as_first_receiver(shared_secret, self.spk.key_pair());
 
         // Create a unique session ID
         let session_id = self.derive_session_id(their_ik, their_ephemeral_key);
@@ -142,7 +143,7 @@ impl Account {
             .unwrap_or_default()
             >= self.config.signed_pre_key_rotation_interval
         {
-            let new_id = self.spk.get_id() + 1;
+            let new_id = self.spk.id() + 1;
             self.spk = SignedPreKey::new(new_id);
             self.spk_last_rotation = now;
         }
@@ -156,11 +157,15 @@ impl Account {
     }
 
     // Derive a unique session ID from identities
-    fn derive_session_id(&self, their_identity: &PublicKey, ephemeral_key: &PublicKey) -> String {
+    fn derive_session_id(
+        &self,
+        their_identity: &X25519PublicKey,
+        ephemeral_key: &X25519PublicKey,
+    ) -> String {
         let mut hasher = Sha256::new();
 
         // Include both identities and the ephemeral key
-        hasher.update(self.ik.get_public_dh_key().as_bytes());
+        hasher.update(self.ik.public_dh_key().as_bytes());
         hasher.update(their_identity.as_bytes());
         hasher.update(ephemeral_key.as_bytes());
 
@@ -184,7 +189,7 @@ mod tests {
     fn test_account_creation() {
         // Create with default config
         let account = Account::new(None);
-        let config = account.get_config();
+        let config = account.config();
 
         // Verify default config values
         assert_eq!(config.max_skipped_messages, 100);
@@ -197,11 +202,10 @@ mod tests {
             min_one_time_pre_keys: 10,
             max_one_time_pre_keys: 50,
             protocol_info: b"Custom-Protocol".to_vec(),
-            kdf_info: b"Custom-KDF".to_vec(),
         };
 
         let account = Account::new(Some(custom_config.clone()));
-        let loaded_config = account.get_config();
+        let loaded_config = account.config();
 
         assert_eq!(
             loaded_config.max_skipped_messages,
@@ -218,7 +222,7 @@ mod tests {
         let mut account = Account::new(None);
 
         // Get key bundle and verify it contains the expected components
-        let (bundle, one_time_keys) = account.get_key_bundle();
+        let (bundle, one_time_keys) = account.pre_key_bundle();
 
         // Verify bundle properties
         assert!(
@@ -240,7 +244,7 @@ mod tests {
         let mut bob_account = Account::new(None);
 
         // Get Bob's key bundle
-        let (bob_bundle, _) = bob_account.get_key_bundle();
+        let (bob_bundle, _) = bob_account.pre_key_bundle();
 
         // Alice initiates a session with Bob
         let alice_session_id = alice_account.initiate_session(&bob_bundle).unwrap();
@@ -274,13 +278,13 @@ mod tests {
 
         let mut account = Account::new(Some(config));
 
-        let (initial_bundle, _) = account.get_key_bundle();
-        let initial_spk_id = initial_bundle.get_signed_pre_id();
+        let (initial_bundle, _) = account.pre_key_bundle();
+        let initial_spk_id = initial_bundle.signed_pre_key_id();
 
         std::thread::sleep(Duration::from_millis(10));
 
-        let (new_bundle, _) = account.get_key_bundle();
-        let new_spk_id = new_bundle.get_signed_pre_id();
+        let (new_bundle, _) = account.pre_key_bundle();
+        let new_spk_id = new_bundle.signed_pre_key_id();
 
         assert_ne!(
             initial_spk_id, new_spk_id,

@@ -30,13 +30,13 @@ mod integration_tests {
         println!("Step 5: Alice performs X3DH...");
         let x3dh = X3DH::new(b"Zealot-Integration-Test");
         let alice_x3dh_result = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
-        let alice_ephemeral_public = alice_x3dh_result.get_public_key();
+        let alice_ephemeral_public = alice_x3dh_result.public_key();
 
         // Step 6: Alice initializes her Double Ratchet
         println!("Step 6: Alice initializes Double Ratchet...");
         let mut alice_ratchet = DoubleRatchet::initialize_as_first_sender(
-            alice_x3dh_result.get_shared_secret(),
-            &bob_bundle.get_signed_pre_key_public(),
+            alice_x3dh_result.shared_secret(),
+            &bob_bundle.public_signed_pre_key(),
         );
 
         // Step 7: Alice sends an initial message to Bob
@@ -59,7 +59,7 @@ mod integration_tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
-                &alice_identity.get_public_dh_key(),
+                &alice_identity.public_dh_key(),
                 &alice_ephemeral_public,
             )
             .unwrap();
@@ -68,7 +68,7 @@ mod integration_tests {
         println!("Step 9: Bob initializes Double Ratchet...");
         let mut bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
             bob_shared_secret,
-            bob_signed_pre_key.get_key_pair(),
+            bob_signed_pre_key.key_pair(),
         );
 
         // Step 10: Bob decrypts Alice's first message
@@ -224,21 +224,21 @@ mod integration_tests {
         // Alice performs X3DH with Bob
         let x3dh = X3DH::new(b"Zealot-Integration-Test");
         let alice_bob_x3dh = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
-        let alice_bob_ephemeral = alice_bob_x3dh.get_public_key();
+        let alice_bob_ephemeral = alice_bob_x3dh.public_key();
 
         // Alice performs X3DH with Charlie
         let alice_charlie_x3dh = x3dh.initiate(&alice_identity, &charlie_bundle).unwrap();
-        let alice_charlie_ephemeral = alice_charlie_x3dh.get_public_key();
+        let alice_charlie_ephemeral = alice_charlie_x3dh.public_key();
 
         // Alice initializes Double Ratchet sessions
         let mut alice_bob_ratchet = DoubleRatchet::initialize_as_first_sender(
-            alice_bob_x3dh.get_shared_secret(),
-            &bob_bundle.get_signed_pre_key_public(),
+            alice_bob_x3dh.shared_secret(),
+            &bob_bundle.public_signed_pre_key(),
         );
 
         let mut alice_charlie_ratchet = DoubleRatchet::initialize_as_first_sender(
-            alice_charlie_x3dh.get_shared_secret(),
-            &charlie_bundle.get_signed_pre_key_public(),
+            alice_charlie_x3dh.shared_secret(),
+            &charlie_bundle.public_signed_pre_key(),
         );
 
         // Bob and Charlie process X3DH
@@ -247,7 +247,7 @@ mod integration_tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
-                &alice_identity.get_public_dh_key(),
+                &alice_identity.public_dh_key(),
                 &alice_bob_ephemeral,
             )
             .unwrap();
@@ -257,7 +257,7 @@ mod integration_tests {
                 &charlie_identity,
                 &charlie_signed_pre_key,
                 Some(charlie_one_time_pre_key),
-                &alice_identity.get_public_dh_key(),
+                &alice_identity.public_dh_key(),
                 &alice_charlie_ephemeral,
             )
             .unwrap();
@@ -265,12 +265,12 @@ mod integration_tests {
         // Bob and Charlie initialize Double Ratchet sessions
         let mut bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
             bob_shared_secret,
-            bob_signed_pre_key.get_key_pair(),
+            bob_signed_pre_key.key_pair(),
         );
 
         let mut charlie_ratchet = DoubleRatchet::initialize_as_first_receiver(
             charlie_shared_secret,
-            charlie_signed_pre_key.get_key_pair(),
+            charlie_signed_pre_key.key_pair(),
         );
 
         // Alice sends messages to Bob and Charlie
@@ -343,12 +343,12 @@ mod integration_tests {
         // Alice performs X3DH with Bob
         let x3dh = X3DH::new(b"Zealot-Integration-Test");
         let alice_bob_x3dh = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
-        let alice_bob_ephemeral = alice_bob_x3dh.get_public_key();
+        let alice_bob_ephemeral = alice_bob_x3dh.public_key();
 
         // Alice initializes Double Ratchet session
         let mut alice_ratchet = DoubleRatchet::initialize_as_first_sender(
-            alice_bob_x3dh.get_shared_secret(),
-            &bob_bundle.get_signed_pre_key_public(),
+            alice_bob_x3dh.shared_secret(),
+            &bob_bundle.public_signed_pre_key(),
         );
 
         // Bob processes X3DH
@@ -357,7 +357,7 @@ mod integration_tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
-                &alice_identity.get_public_dh_key(),
+                &alice_identity.public_dh_key(),
                 &alice_bob_ephemeral,
             )
             .unwrap();
@@ -365,7 +365,7 @@ mod integration_tests {
         // Bob initializes Double Ratchet session
         let mut bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
             bob_shared_secret,
-            bob_signed_pre_key.get_key_pair(),
+            bob_signed_pre_key.key_pair(),
         );
 
         // Exchange a few messages to advance the ratchet
@@ -407,12 +407,12 @@ mod integration_tests {
 
         // Alice initiates a new X3DH with Bob's new bundle
         let alice_new_x3dh = x3dh.initiate(&alice_identity, &bob_new_bundle).unwrap();
-        let alice_new_ephemeral = alice_new_x3dh.get_public_key();
+        let alice_new_ephemeral = alice_new_x3dh.public_key();
 
         // Alice creates a new ratchet session
         let mut alice_new_ratchet = DoubleRatchet::initialize_as_first_sender(
-            alice_new_x3dh.get_shared_secret(),
-            &bob_new_bundle.get_signed_pre_key_public(),
+            alice_new_x3dh.shared_secret(),
+            &bob_new_bundle.public_signed_pre_key(),
         );
 
         // Bob processes the new X3DH
@@ -421,7 +421,7 @@ mod integration_tests {
                 &bob_identity,
                 &bob_new_signed_pre_key,
                 Some(bob_new_one_time_pre_key),
-                &alice_identity.get_public_dh_key(),
+                &alice_identity.public_dh_key(),
                 &alice_new_ephemeral,
             )
             .unwrap();
@@ -429,7 +429,7 @@ mod integration_tests {
         // Bob initializes a new ratchet session
         let mut bob_new_ratchet = DoubleRatchet::initialize_as_first_receiver(
             bob_new_shared_secret,
-            bob_new_signed_pre_key.get_key_pair(),
+            bob_new_signed_pre_key.key_pair(),
         );
 
         // Test that they can continue communicating

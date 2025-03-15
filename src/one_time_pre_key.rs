@@ -1,12 +1,11 @@
-use crate::Error;
+use crate::{Error, X25519PublicKey, X25519Secret};
 use rand::TryRngCore;
 use rand::rngs::OsRng;
 use std::collections::HashMap;
-use x25519_dalek::{PublicKey, StaticSecret};
 
 #[derive(Clone)]
 pub struct OneTimePreKey {
-    pre_key: StaticSecret,
+    pre_key: X25519Secret,
     id: u32,
     created_at: std::time::SystemTime,
     used: bool,
@@ -16,21 +15,20 @@ impl OneTimePreKey {
     pub fn new(id: u32) -> Self {
         let mut seed = [0u8; 32];
         OsRng.try_fill_bytes(&mut seed).unwrap();
-        let pre_key = StaticSecret::from(seed);
 
         Self {
-            pre_key,
+            pre_key: X25519Secret::from(seed),
             id,
             created_at: std::time::SystemTime::now(),
             used: false,
         }
     }
 
-    pub fn get_public_key(&self) -> PublicKey {
-        (&self.pre_key).into()
+    pub fn public_key(&self) -> X25519PublicKey {
+        self.pre_key.public_key()
     }
 
-    pub fn get_id(&self) -> u32 {
+    pub fn id(&self) -> u32 {
         self.id
     }
 
@@ -42,12 +40,12 @@ impl OneTimePreKey {
         self.used = true;
     }
 
-    pub fn dh(self, public_key: &PublicKey) -> Result<[u8; 32], Error> {
+    pub fn dh(self, public_key: &X25519PublicKey) -> Result<[u8; 32], Error> {
         if self.used {
             return Err(Error::PreKey("Pre-key already used".to_string()));
         }
 
-        Ok(self.pre_key.diffie_hellman(public_key).to_bytes())
+        Ok(self.pre_key.dh(public_key).to_bytes())
     }
 
     /// Extract this one-time-key keys bytes for serialization.
@@ -94,10 +92,9 @@ impl From<[u8; 45]> for OneTimePreKey {
         // Extract the key
         let mut key_bytes = [0u8; 32];
         key_bytes.copy_from_slice(&bytes[13..45]);
-        let pre_key = StaticSecret::from(key_bytes);
 
         Self {
-            pre_key,
+            pre_key: X25519Secret::from(key_bytes),
             id,
             created_at,
             used,
@@ -136,10 +133,10 @@ impl OneTimePreKeyStore {
         self.keys.get(&id)
     }
 
-    pub(crate) fn get_public_keys(&self) -> HashMap<u32, PublicKey> {
+    pub(crate) fn get_public_keys(&self) -> HashMap<u32, X25519PublicKey> {
         let mut indexed_pks = HashMap::new();
         self.keys.iter().for_each(|(idx, otpk)| {
-            indexed_pks.insert(*idx, otpk.get_public_key());
+            indexed_pks.insert(*idx, otpk.public_key());
         });
 
         indexed_pks
@@ -167,11 +164,11 @@ mod tests {
     fn test_one_time_pre_key_creation() {
         let pre_key = OneTimePreKey::new(42);
 
-        assert_eq!(pre_key.get_id(), 42);
+        assert_eq!(pre_key.id(), 42);
         assert!(!pre_key.is_used());
 
         // Check that the public key is properly initialized
-        let public_key = pre_key.get_public_key();
+        let public_key = pre_key.public_key();
         assert!(!public_key.as_bytes().iter().all(|&b| b == 0));
     }
 
@@ -194,11 +191,11 @@ mod tests {
 
         // Deserialize and check if it matches
         let deserialized_key = OneTimePreKey::from(serialized);
-        assert_eq!(deserialized_key.get_id(), original_key.get_id());
+        assert_eq!(deserialized_key.id(), original_key.id());
         assert_eq!(deserialized_key.is_used(), original_key.is_used());
         assert_eq!(
-            deserialized_key.get_public_key().as_bytes(),
-            original_key.get_public_key().as_bytes()
+            deserialized_key.public_key().as_bytes(),
+            original_key.public_key().as_bytes()
         );
     }
 
@@ -208,8 +205,8 @@ mod tests {
         let bob_key = OneTimePreKey::new(2);
 
         // Get public keys
-        let alice_public = alice_key.get_public_key();
-        let bob_public = bob_key.get_public_key();
+        let alice_public = alice_key.public_key();
+        let bob_public = bob_key.public_key();
 
         // Perform DH exchange - note that these consume the keys
         let shared_alice = alice_key.dh(&bob_public).unwrap();
@@ -222,7 +219,7 @@ mod tests {
     #[test]
     fn test_one_time_pre_key_cannot_be_reused() {
         let mut key = OneTimePreKey::new(1);
-        let other_public = OneTimePreKey::new(2).get_public_key();
+        let other_public = OneTimePreKey::new(2).public_key();
 
         // Mark key as used
         key.mark_as_used();

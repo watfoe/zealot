@@ -1,3 +1,6 @@
+mod crypto;
+pub use crypto::*;
+
 mod identity_key;
 pub use identity_key::*;
 

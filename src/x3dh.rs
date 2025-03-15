@@ -1,20 +1,22 @@
 use hkdf::Hkdf;
 use sha2::Sha256;
-use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
-use crate::{Error, IdentityKey, OneTimePreKey, PreKeyBundle, SignedPreKey, generate_random_seed};
+use crate::{
+    Error, IdentityKey, OneTimePreKey, PreKeyBundle, SignedPreKey, X25519PublicKey, X25519Secret,
+    generate_random_seed,
+};
 
 const SALT: &[u8] = b"Zealot-E2E-NaCl";
 
 pub struct EphemeralKey {
-    key: StaticSecret,
+    key: X25519Secret,
 }
 
 impl Default for EphemeralKey {
     fn default() -> Self {
         Self {
-            key: StaticSecret::from(generate_random_seed().unwrap()),
+            key: X25519Secret::from(generate_random_seed().unwrap()),
         }
     }
 }
@@ -24,12 +26,12 @@ impl EphemeralKey {
         Self::default()
     }
 
-    pub fn public_key(&self) -> PublicKey {
-        PublicKey::from(&self.key)
+    pub fn public_key(&self) -> X25519PublicKey {
+        self.key.public_key()
     }
 
-    pub fn dh(&self, public: &PublicKey) -> [u8; 32] {
-        self.key.diffie_hellman(public).to_bytes()
+    pub fn dh(&self, public: &X25519PublicKey) -> [u8; 32] {
+        self.key.dh(public).to_bytes()
     }
 }
 
@@ -41,15 +43,15 @@ impl Drop for EphemeralKey {
 
 pub struct X3DHResult {
     shared_secret: [u8; 32],
-    ephemeral_public: PublicKey, // A's ephemeral public key (sent to B)
+    ephemeral_public: X25519PublicKey, // A's ephemeral public key (sent to B)
 }
 
 impl X3DHResult {
-    pub fn get_public_key(&self) -> PublicKey {
+    pub fn public_key(&self) -> X25519PublicKey {
         self.ephemeral_public
     }
 
-    pub fn get_shared_secret(self) -> [u8; 32] {
+    pub fn shared_secret(self) -> [u8; 32] {
         self.shared_secret
     }
 }
@@ -78,14 +80,14 @@ impl X3DH {
         let a_ephemeral = EphemeralKey::new();
 
         // DH1 = DH(IKa, SPKb)
-        let dh1 = a_identity.dh(&b_bundle.get_signed_pre_key_public());
+        let dh1 = a_identity.dh(&b_bundle.public_signed_pre_key());
         // DH2 = DH(EKa, IKb)
-        let dh2 = a_ephemeral.dh(&b_bundle.get_identity_key_public());
+        let dh2 = a_ephemeral.dh(&b_bundle.public_identity_key());
         // DH3 = DH(EKa, SPKb)
-        let dh3 = a_ephemeral.dh(&b_bundle.get_signed_pre_key_public());
+        let dh3 = a_ephemeral.dh(&b_bundle.public_signed_pre_key());
         // DH4 = DH(EKa, OPKb)
         let dh4_opt = b_bundle
-            .get_one_time_pre_key_public()
+            .public_one_time_pre_key()
             .map(|opk| a_ephemeral.dh(&opk));
 
         let a_ephemeral_public = a_ephemeral.public_key();
@@ -101,8 +103,8 @@ impl X3DH {
         b_identity: &IdentityKey,
         b_signed_pre_key: &SignedPreKey,
         b_one_time_pre_key: Option<OneTimePreKey>,
-        a_identity_public: &PublicKey,
-        a_ephemeral_public: &PublicKey,
+        a_identity_public: &X25519PublicKey,
+        a_ephemeral_public: &X25519PublicKey,
     ) -> Result<[u8; 32], Error> {
         // DH1 = DH(SPKb, IKa)
         let dh1 = b_signed_pre_key.dh(a_identity_public);
@@ -134,7 +136,7 @@ impl X3DH {
         mut dh2: [u8; 32],
         mut dh3: [u8; 32],
         mut dh4: Option<[u8; 32]>,
-        ephemeral_public: &PublicKey,
+        ephemeral_public: &X25519PublicKey,
     ) -> Result<X3DHResult, Error> {
         // IKM = DH1 || DH2 || DH3 || DH4 (if available)
         let mut key_material = Vec::new();
@@ -194,7 +196,7 @@ mod tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
-                &alice_identity.get_public_dh_key(),
+                &alice_identity.public_dh_key(),
                 &alice_result.ephemeral_public,
             )
             .unwrap();
@@ -219,7 +221,7 @@ mod tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 None,
-                &alice_identity.get_public_dh_key(),
+                &alice_identity.public_dh_key(),
                 &alice_result.ephemeral_public,
             )
             .unwrap();

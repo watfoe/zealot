@@ -1,8 +1,8 @@
 use crate::chain::Chain;
 use crate::error::Error;
-use crate::generate_random_seed;
 use crate::ratchet_message::{MessageHeader, RatchetMessage};
 use crate::state::RatchetState;
+use crate::{X25519PublicKey, X25519Secret, generate_random_seed};
 use aes_gcm_siv::aead::Aead;
 use aes_gcm_siv::{Aes256GcmSiv, KeyInit, Nonce};
 use hkdf::Hkdf;
@@ -10,7 +10,7 @@ use rand::TryRngCore;
 use sha2::Sha256;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
+use x25519_dalek::SharedSecret;
 use zeroize::Zeroize;
 
 const NONCE_SIZE: usize = 12; // AES-GCM uses 12-byte (96-bit) nonces
@@ -56,19 +56,19 @@ impl Drop for DoubleRatchet {
 
 impl DoubleRatchet {
     /// Get the current dh ratchet public key
-    pub fn get_public_key(&self) -> PublicKey {
-        PublicKey::from(&self.state.dh_pair)
+    pub fn public_key(&self) -> X25519PublicKey {
+        self.state.dh_pair.public_key()
     }
 
     /// Initialize a ratchet as the first sender (Alice)
     pub fn initialize_as_first_sender(
         mut shared_secret: [u8; 32],
-        receiver_public_key: &PublicKey,
+        receiver_public_key: &X25519PublicKey,
     ) -> Self {
-        let dh_pair = StaticSecret::from(generate_random_seed().unwrap());
+        let dh_pair = X25519Secret::from(generate_random_seed().unwrap());
 
         // Perform initial DH and KDF
-        let dh_output = dh_pair.diffie_hellman(receiver_public_key);
+        let dh_output = dh_pair.dh(receiver_public_key);
         let (new_root_key, chain_key, next_sending_header_key) =
             Self::kdf_rk_he(&shared_secret, dh_output);
 
@@ -100,7 +100,7 @@ impl DoubleRatchet {
     }
 
     /// Initialize a ratchet as the first receiver (Bob)
-    pub fn initialize_as_first_receiver(shared_secret: [u8; 32], dh_pair: StaticSecret) -> Self {
+    pub fn initialize_as_first_receiver(shared_secret: [u8; 32], dh_pair: X25519Secret) -> Self {
         let (header_key_a, next_header_key_b) = DoubleRatchet::derive_initial_keys(shared_secret);
 
         Self {
@@ -169,7 +169,7 @@ impl DoubleRatchet {
         associated_data: &[u8],
     ) -> Result<RatchetMessage, Error> {
         let header = MessageHeader {
-            public_key: self.get_public_key(),
+            public_key: self.public_key(),
             previous_chain_length: self.state.previous_sending_chain_length,
             message_number: self.state.sending_message_number,
         };
@@ -362,7 +362,7 @@ impl DoubleRatchet {
         self.state.sending_header_key = Some(self.state.next_sending_header_key);
 
         // Derive new receiving chain
-        let dh_output = self.state.dh_pair.diffie_hellman(&header.public_key);
+        let dh_output = self.state.dh_pair.dh(&header.public_key);
         let (new_root_key, chain_key, next_header_key) =
             Self::kdf_rk_he(&self.state.root_key, dh_output);
         self.state.root_key = new_root_key;
@@ -370,10 +370,10 @@ impl DoubleRatchet {
         self.state.next_receiving_header_key = Some(next_header_key);
 
         // Generate new DH key pair
-        self.state.dh_pair = StaticSecret::from(generate_random_seed()?);
+        self.state.dh_pair = X25519Secret::from(generate_random_seed()?);
 
         // Derive new sending chain
-        let dh_output = self.state.dh_pair.diffie_hellman(&header.public_key);
+        let dh_output = self.state.dh_pair.dh(&header.public_key);
         let (new_root_key, chain_key, next_header_key) =
             Self::kdf_rk_he(&self.state.root_key, dh_output);
         self.state.root_key = new_root_key;
@@ -485,10 +485,10 @@ mod tests {
 
         // Initialize ratchets
         let alice_ratchet =
-            DoubleRatchet::initialize_as_first_sender(shared_secret, &bob_spk.get_public_key());
+            DoubleRatchet::initialize_as_first_sender(shared_secret, &bob_spk.public_key());
 
         let bob_ratchet =
-            DoubleRatchet::initialize_as_first_receiver(shared_secret, bob_spk.get_key_pair());
+            DoubleRatchet::initialize_as_first_receiver(shared_secret, bob_spk.key_pair());
 
         (alice_ratchet, bob_ratchet)
     }
@@ -603,7 +603,7 @@ mod tests {
         assert_eq!(String::from_utf8(decrypted).unwrap(), alice_message);
 
         // Save current ratchet state for later comparison
-        let alice_initial_public = alice_ratchet.get_public_key();
+        let alice_initial_public = alice_ratchet.public_key();
 
         // Send multiple messages back and forth to trigger key rotation
         for i in 0..5 {
@@ -621,7 +621,7 @@ mod tests {
         }
 
         // Verify that Alice's public key has changed (indicating DH ratchet turned)
-        let alice_final_public = alice_ratchet.get_public_key();
+        let alice_final_public = alice_ratchet.public_key();
         assert_ne!(
             alice_initial_public.as_bytes(),
             alice_final_public.as_bytes(),
@@ -647,11 +647,11 @@ mod tests {
         // 3. Alice performs X3DH with Bob's bundle
         let x3dh = X3DH::new(b"Test-Signal-Protocol");
         let alice_x3dh_result = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
-        let alice_public_key = alice_x3dh_result.get_public_key();
+        let alice_public_key = alice_x3dh_result.public_key();
         // 4. Alice initializes her Double Ratchet with the shared secret
         let mut alice_ratchet = DoubleRatchet::initialize_as_first_sender(
-            alice_x3dh_result.get_shared_secret(),
-            &bob_bundle.get_signed_pre_key_public(),
+            alice_x3dh_result.shared_secret(),
+            &bob_bundle.public_signed_pre_key(),
         );
         // 5. Bob processes Alice's initiation
         let bob_shared_secret = x3dh
@@ -659,14 +659,14 @@ mod tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
-                &alice_identity.get_public_dh_key(),
+                &alice_identity.public_dh_key(),
                 &alice_public_key,
             )
             .unwrap();
         // 6. Bob initializes his Double Ratchet with the shared secret
         let mut bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
             bob_shared_secret,
-            bob_signed_pre_key.get_key_pair(),
+            bob_signed_pre_key.key_pair(),
         );
         // 7. Test message exchange
         let message = "This is a secure message using X3DH + Double Ratchet!";

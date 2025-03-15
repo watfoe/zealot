@@ -1,11 +1,11 @@
 use crate::chain::Chain;
-use x25519_dalek::{PublicKey, StaticSecret};
+use crate::{X25519PublicKey, X25519Secret};
 
 #[derive(Clone)]
-pub struct RatchetState {
-    pub(crate) dh_pair: StaticSecret,
+pub(crate) struct RatchetState {
+    pub(crate) dh_pair: X25519Secret,
 
-    pub(crate) dh_remote_public: Option<PublicKey>,
+    pub(crate) dh_remote_public: Option<X25519PublicKey>,
 
     pub(crate) root_key: [u8; 32],
     pub(crate) sending_chain: Chain,

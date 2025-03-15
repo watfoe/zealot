@@ -1,12 +1,12 @@
 use crate::chain::Chain;
 use crate::state::RatchetState;
 use crate::{
-    Account, AccountConfig, DoubleRatchet, Error, IdentityKey, OneTimePreKey, Session, SignedPreKey,
+    Account, AccountConfig, DoubleRatchet, Error, IdentityKey, OneTimePreKey, Session,
+    SignedPreKey, X25519PublicKey, X25519Secret,
 };
 use prost::Message;
 use std::collections::HashMap;
 use std::time::{Duration, UNIX_EPOCH};
-use x25519_dalek::{PublicKey, StaticSecret};
 
 include!(concat!(env!("OUT_DIR"), "/zealot.rs"));
 
@@ -41,7 +41,6 @@ impl Account {
             min_one_time_pre_keys: self.config.min_one_time_pre_keys as u32,
             max_one_time_pre_keys: self.config.max_one_time_pre_keys as u32,
             protocol_info: self.config.protocol_info.clone(),
-            kdf_info: self.config.kdf_info.clone(),
         };
 
         let mut sessions = HashMap::new();
@@ -124,7 +123,6 @@ impl Account {
                 min_one_time_pre_keys: config_proto.min_one_time_pre_keys as usize,
                 max_one_time_pre_keys: config_proto.max_one_time_pre_keys as usize,
                 protocol_info: config_proto.protocol_info,
-                kdf_info: config_proto.kdf_info,
             }
         } else {
             return Err(Error::Serde("Missing account config".to_string()));
@@ -248,7 +246,7 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
 
     let mut dh_pair_bytes = [0u8; 32];
     dh_pair_bytes.copy_from_slice(&proto.dh_pair);
-    let dh_pair = StaticSecret::from(dh_pair_bytes);
+    let dh_pair = X25519Secret::from(dh_pair_bytes);
 
     let state_proto = proto
         .state
@@ -260,7 +258,7 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
         }
         let mut pk_bytes = [0u8; 32];
         pk_bytes.copy_from_slice(&state_proto.dh_remote_public);
-        Some(PublicKey::from(pk_bytes))
+        Some(X25519PublicKey::from(pk_bytes))
     } else {
         None
     };
@@ -397,12 +395,12 @@ mod tests {
         // Alice performs X3DH with Bob's bundle
         let x3dh = X3DH::new(b"Test-Session-Protocol");
         let alice_x3dh_result = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
-        let alice_ephemeral_public = alice_x3dh_result.get_public_key();
+        let alice_ephemeral_public = alice_x3dh_result.public_key();
 
         // Alice initializes her Double Ratchet
         let alice_ratchet = DoubleRatchet::initialize_as_first_sender(
-            alice_x3dh_result.get_shared_secret(),
-            &bob_bundle.get_signed_pre_key_public(),
+            alice_x3dh_result.shared_secret(),
+            &bob_bundle.public_signed_pre_key(),
         );
 
         // Create a session ID for Alice
@@ -415,7 +413,7 @@ mod tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
-                &alice_identity.get_public_dh_key(),
+                &alice_identity.public_dh_key(),
                 &alice_ephemeral_public,
             )
             .unwrap();
@@ -423,7 +421,7 @@ mod tests {
         // Bob initializes his Double Ratchet
         let bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
             bob_shared_secret,
-            bob_signed_pre_key.get_key_pair(),
+            bob_signed_pre_key.key_pair(),
         );
 
         // Create a session ID for Bob
@@ -441,7 +439,6 @@ mod tests {
             min_one_time_pre_keys: 15,
             max_one_time_pre_keys: 75,
             protocol_info: b"Test-Protocol".to_vec(),
-            kdf_info: b"Test-KDF".to_vec(),
         };
         let mut account = Account::new(Some(config));
 
@@ -457,14 +454,14 @@ mod tests {
         let deserialized_account = Account::deserialize(&serialized).unwrap();
 
         assert_eq!(
-            account.ik.get_public_dh_key().as_bytes(),
-            deserialized_account.ik.get_public_dh_key().as_bytes(),
+            account.ik.public_dh_key().as_bytes(),
+            deserialized_account.ik.public_dh_key().as_bytes(),
             "Identity keys should match"
         );
 
         assert_eq!(
-            account.spk.get_public_key().as_bytes(),
-            deserialized_account.spk.get_public_key().as_bytes(),
+            account.spk.public_key().as_bytes(),
+            deserialized_account.spk.public_key().as_bytes(),
             "Signed pre-keys should match"
         );
 

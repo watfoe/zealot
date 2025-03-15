@@ -23,7 +23,6 @@ message AccountConfigProto {
     uint32 min_one_time_pre_keys = 3;
     uint32 max_one_time_pre_keys = 4;
     bytes protocol_info = 5;
-    bytes kdf_info = 6;
 }
 
 message SessionProto {

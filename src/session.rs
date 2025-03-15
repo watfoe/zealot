@@ -71,12 +71,12 @@ mod tests {
         // Alice performs X3DH with Bob's bundle
         let x3dh = X3DH::new(b"Test-Session-Protocol");
         let alice_x3dh_result = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
-        let alice_ephemeral_public = alice_x3dh_result.get_public_key();
+        let alice_ephemeral_public = alice_x3dh_result.public_key();
 
         // Alice initializes her Double Ratchet
         let alice_ratchet = DoubleRatchet::initialize_as_first_sender(
-            alice_x3dh_result.get_shared_secret(),
-            &bob_bundle.get_signed_pre_key_public(),
+            alice_x3dh_result.shared_secret(),
+            &bob_bundle.public_signed_pre_key(),
         );
 
         // Create a session ID for Alice
@@ -89,7 +89,7 @@ mod tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
-                &alice_identity.get_public_dh_key(),
+                &alice_identity.public_dh_key(),
                 &alice_ephemeral_public,
             )
             .unwrap();
@@ -97,7 +97,7 @@ mod tests {
         // Bob initializes his Double Ratchet
         let bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
             bob_shared_secret,
-            bob_signed_pre_key.get_key_pair(),
+            bob_signed_pre_key.key_pair(),
         );
 
         // Create a session ID for Bob

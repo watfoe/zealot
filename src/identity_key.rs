@@ -1,9 +1,8 @@
-use crate::Error;
+use crate::{Error, X25519PublicKey, X25519Secret};
 use ed25519_dalek::Signer;
 use ed25519_dalek::{SecretKey, SigningKey, Verifier, ed25519};
 use rand::TryRngCore;
 use rand::rngs::OsRng;
-use x25519_dalek::StaticSecret;
 
 pub fn generate_random_seed() -> Result<[u8; 32], Error> {
     let mut seed = [0u8; 32];
@@ -15,25 +14,19 @@ fn generate_ed25519_signing_key(seed: [u8; 32]) -> SigningKey {
     SigningKey::from_bytes(&SecretKey::from(seed))
 }
 
-fn generate_x25519_dh_key(seed: [u8; 32]) -> StaticSecret {
-    StaticSecret::from(seed)
-}
-
 pub struct IdentityKey {
     signing_key: SigningKey,
-    dh_key: StaticSecret,
+    dh_key: X25519Secret,
 }
 
 impl Default for IdentityKey {
     fn default() -> Self {
         let seed = generate_random_seed().unwrap();
-
         let signing_key = generate_ed25519_signing_key(seed);
-        let dh_key = generate_x25519_dh_key(seed);
 
         Self {
             signing_key,
-            dh_key,
+            dh_key: X25519Secret::from(seed),
         }
     }
 }
@@ -58,17 +51,17 @@ impl IdentityKey {
     }
 
     // Get the public Ed25519 verifying key
-    pub fn get_public_signing_key(&self) -> ed25519_dalek::VerifyingKey {
+    pub fn public_signing_key(&self) -> ed25519_dalek::VerifyingKey {
         self.signing_key.verifying_key()
     }
 
     // Get the public X25519 key for DH operations
-    pub fn get_public_dh_key(&self) -> x25519_dalek::PublicKey {
-        (&self.dh_key).into()
+    pub fn public_dh_key(&self) -> X25519PublicKey {
+        self.dh_key.public_key()
     }
 
-    pub fn dh(&self, public_key: &x25519_dalek::PublicKey) -> [u8; 32] {
-        self.dh_key.diffie_hellman(public_key).to_bytes()
+    pub fn dh(&self, public_key: &X25519PublicKey) -> [u8; 32] {
+        self.dh_key.dh(public_key).to_bytes()
     }
 
     pub fn to_bytes(&self) -> [u8; 64] {
@@ -89,7 +82,7 @@ impl From<[u8; 64]> for IdentityKey {
 
         let mut private_dh_bytes = [0u8; 32];
         private_dh_bytes.copy_from_slice(&bytes[32..64]);
-        let dh_key = StaticSecret::from(private_dh_bytes);
+        let dh_key = X25519Secret::from(private_dh_bytes);
 
         Self {
             signing_key,
@@ -135,13 +128,13 @@ mod tests {
         let bob_identity = IdentityKey::new();
 
         // Get Bob's public DH key
-        let bob_public = bob_identity.get_public_dh_key();
+        let bob_public = bob_identity.public_dh_key();
 
         // Alice computes the shared secret
         let alice_shared = alice_identity.dh(&bob_public);
 
         // Get Alice's public DH key
-        let alice_public = alice_identity.get_public_dh_key();
+        let alice_public = alice_identity.public_dh_key();
 
         // Bob computes the shared secret
         let bob_shared = bob_identity.dh(&alice_public);
@@ -179,12 +172,11 @@ mod tests {
 
         // Create signing and DH keys from the same seed
         let signing_key = generate_ed25519_signing_key(seed);
-        let dh_key = generate_x25519_dh_key(seed);
 
         // Create a new identity key directly
         let identity_key = IdentityKey {
             signing_key,
-            dh_key,
+            dh_key: X25519Secret::from(seed),
         };
 
         // Test signing with the derived key

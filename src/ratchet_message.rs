@@ -1,10 +1,9 @@
-use x25519_dalek::PublicKey;
-use crate::Error;
+use crate::{Error, X25519PublicKey};
 
 /// Header for a ratchet message
 #[derive(Clone, Debug)]
 pub struct MessageHeader {
-    pub public_key: PublicKey,
+    pub public_key: X25519PublicKey,
     pub previous_chain_length: u32,
     pub message_number: u32,
 }
@@ -37,7 +36,7 @@ impl From<[u8; 40]> for MessageHeader {
         let mut n_bytes = [0u8; 4];
         n_bytes.copy_from_slice(&bytes[36..40]);
 
-        let public_key = PublicKey::from(dh_bytes);
+        let public_key = X25519PublicKey::from(dh_bytes);
         let previous_chain_length = u32::from_be_bytes(pn_bytes);
         let message_number = u32::from_be_bytes(n_bytes);
 
@@ -80,7 +79,7 @@ impl RatchetMessage {
 
         Ok(Self {
             header: bytes[4..4 + header_len].to_vec(),
-            ciphertext: bytes[4 + header_len..].to_vec()
+            ciphertext: bytes[4 + header_len..].to_vec(),
         })
-     }
+    }
 }
