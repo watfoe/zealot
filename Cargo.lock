@@ -955,7 +955,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm-siv",
  "base64",
- "bytes 0.4.12",
+ "bytes 1.10.1",
  "ed25519-dalek",
  "hkdf",
  "hmac",
