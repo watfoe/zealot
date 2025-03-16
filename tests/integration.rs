@@ -34,7 +34,7 @@ mod integration_tests {
 
         // Step 6: Alice initializes her Double Ratchet
         println!("Step 6: Alice initializes Double Ratchet...");
-        let mut alice_ratchet = DoubleRatchet::initialize_as_first_sender(
+        let mut alice_ratchet = DoubleRatchet::initialize_for_alice(
             alice_x3dh_result.shared_secret(),
             &bob_bundle.public_signed_pre_key(),
         );
@@ -66,10 +66,8 @@ mod integration_tests {
 
         // Step 9: Bob initializes his Double Ratchet with the shared secret
         println!("Step 9: Bob initializes Double Ratchet...");
-        let mut bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
-            bob_shared_secret,
-            bob_signed_pre_key.key_pair(),
-        );
+        let mut bob_ratchet =
+            DoubleRatchet::initialize_for_bob(bob_shared_secret, bob_signed_pre_key.key_pair());
 
         // Step 10: Bob decrypts Alice's first message
         println!("Step 10: Bob decrypts Alice's first message...");
@@ -231,12 +229,12 @@ mod integration_tests {
         let alice_charlie_ephemeral = alice_charlie_x3dh.public_key();
 
         // Alice initializes Double Ratchet sessions
-        let mut alice_bob_ratchet = DoubleRatchet::initialize_as_first_sender(
+        let mut alice_bob_ratchet = DoubleRatchet::initialize_for_alice(
             alice_bob_x3dh.shared_secret(),
             &bob_bundle.public_signed_pre_key(),
         );
 
-        let mut alice_charlie_ratchet = DoubleRatchet::initialize_as_first_sender(
+        let mut alice_charlie_ratchet = DoubleRatchet::initialize_for_alice(
             alice_charlie_x3dh.shared_secret(),
             &charlie_bundle.public_signed_pre_key(),
         );
@@ -263,12 +261,10 @@ mod integration_tests {
             .unwrap();
 
         // Bob and Charlie initialize Double Ratchet sessions
-        let mut bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
-            bob_shared_secret,
-            bob_signed_pre_key.key_pair(),
-        );
+        let mut bob_ratchet =
+            DoubleRatchet::initialize_for_bob(bob_shared_secret, bob_signed_pre_key.key_pair());
 
-        let mut charlie_ratchet = DoubleRatchet::initialize_as_first_receiver(
+        let mut charlie_ratchet = DoubleRatchet::initialize_for_bob(
             charlie_shared_secret,
             charlie_signed_pre_key.key_pair(),
         );
@@ -346,7 +342,7 @@ mod integration_tests {
         let alice_bob_ephemeral = alice_bob_x3dh.public_key();
 
         // Alice initializes Double Ratchet session
-        let mut alice_ratchet = DoubleRatchet::initialize_as_first_sender(
+        let mut alice_ratchet = DoubleRatchet::initialize_for_alice(
             alice_bob_x3dh.shared_secret(),
             &bob_bundle.public_signed_pre_key(),
         );
@@ -363,10 +359,8 @@ mod integration_tests {
             .unwrap();
 
         // Bob initializes Double Ratchet session
-        let mut bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
-            bob_shared_secret,
-            bob_signed_pre_key.key_pair(),
-        );
+        let mut bob_ratchet =
+            DoubleRatchet::initialize_for_bob(bob_shared_secret, bob_signed_pre_key.key_pair());
 
         // Exchange a few messages to advance the ratchet
         for i in 0..3 {
@@ -410,7 +404,7 @@ mod integration_tests {
         let alice_new_ephemeral = alice_new_x3dh.public_key();
 
         // Alice creates a new ratchet session
-        let mut alice_new_ratchet = DoubleRatchet::initialize_as_first_sender(
+        let mut alice_new_ratchet = DoubleRatchet::initialize_for_alice(
             alice_new_x3dh.shared_secret(),
             &bob_new_bundle.public_signed_pre_key(),
         );
@@ -427,7 +421,7 @@ mod integration_tests {
             .unwrap();
 
         // Bob initializes a new ratchet session
-        let mut bob_new_ratchet = DoubleRatchet::initialize_as_first_receiver(
+        let mut bob_new_ratchet = DoubleRatchet::initialize_for_bob(
             bob_new_shared_secret,
             bob_new_signed_pre_key.key_pair(),
         );

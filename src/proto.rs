@@ -398,7 +398,7 @@ mod tests {
         let alice_ephemeral_public = alice_x3dh_result.public_key();
 
         // Alice initializes her Double Ratchet
-        let alice_ratchet = DoubleRatchet::initialize_as_first_sender(
+        let alice_ratchet = DoubleRatchet::initialize_for_alice(
             alice_x3dh_result.shared_secret(),
             &bob_bundle.public_signed_pre_key(),
         );
@@ -419,7 +419,7 @@ mod tests {
             .unwrap();
 
         // Bob initializes his Double Ratchet
-        let bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
+        let bob_ratchet = DoubleRatchet::initialize_for_bob(
             bob_shared_secret,
             bob_signed_pre_key.key_pair(),
         );
@@ -447,7 +447,7 @@ mod tests {
         let bob_signed_pre_key = SignedPreKey::new(1);
         let bob_bundle = PreKeyBundle::new(&bob_identity, &bob_signed_pre_key, None);
 
-        let session_id = account.initiate_session(&bob_bundle).unwrap();
+        let session_id = account.create_outbound_session(&bob_bundle).unwrap();
 
         let serialized = account.serialize().unwrap();
 
@@ -488,7 +488,7 @@ mod tests {
         );
 
         assert!(
-            deserialized_account.get_session(&session_id).is_some(),
+            deserialized_account.session(&session_id).is_some(),
             "Session should exist in deserialized account"
         );
     }

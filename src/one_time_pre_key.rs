@@ -3,6 +3,11 @@ use rand::TryRngCore;
 use rand::rngs::OsRng;
 use std::collections::HashMap;
 
+/// A one-time pre-key as defined in Signal's X3DH protocol.
+///
+/// One-time pre-keys (OPK) provide additional security by ensuring
+/// forward secrecy even if the signed pre-key is compromised. Each key should
+/// be used at most once and then discarded.
 #[derive(Clone)]
 pub struct OneTimePreKey {
     pre_key: X25519Secret,
@@ -12,6 +17,7 @@ pub struct OneTimePreKey {
 }
 
 impl OneTimePreKey {
+    /// Creates a new one-time pre-key with the given ID.
     pub fn new(id: u32) -> Self {
         let mut seed = [0u8; 32];
         OsRng.try_fill_bytes(&mut seed).unwrap();
@@ -24,22 +30,27 @@ impl OneTimePreKey {
         }
     }
 
+    /// Returns the public component of this pre-key.
     pub fn public_key(&self) -> X25519PublicKey {
         self.pre_key.public_key()
     }
 
+    /// Returns the unique identifier for this pre-key.
     pub fn id(&self) -> u32 {
         self.id
     }
 
+    /// Checks if this pre-key has been used.
     pub fn is_used(&self) -> bool {
         self.used
     }
 
+    /// Marks this pre-key as used, preventing future use.
     pub fn mark_as_used(&mut self) {
         self.used = true;
     }
 
+    /// Performs a Diffie-Hellman key agreement with the provided public key.
     pub fn dh(self, public_key: &X25519PublicKey) -> Result<[u8; 32], Error> {
         if self.used {
             return Err(Error::PreKey("Pre-key already used".to_string()));
@@ -48,7 +59,13 @@ impl OneTimePreKey {
         Ok(self.pre_key.dh(public_key).to_bytes())
     }
 
-    /// Extract this one-time-key keys bytes for serialization.
+    /// Serializes the one-time pre-key to a 45-byte array for storage.
+    ///
+    /// The format is:
+    /// - 4 bytes: ID (big-endian u32)
+    /// - 8 bytes: Creation timestamp (big-endian u64 seconds since UNIX epoch)
+    /// - 1 byte: Used flag (0 = unused, 1 = used)
+    /// - 32 bytes: X25519 key
     pub fn to_bytes(&self) -> [u8; 45] {
         let mut result = [0u8; 45];
 
@@ -74,6 +91,7 @@ impl OneTimePreKey {
 }
 
 impl From<[u8; 45]> for OneTimePreKey {
+    /// Deserializes a one-time pre-key from a 45-byte array.
     fn from(bytes: [u8; 45]) -> Self {
         let mut id_bytes = [0u8; 4];
         id_bytes.copy_from_slice(&bytes[0..4]);
@@ -102,7 +120,6 @@ impl From<[u8; 45]> for OneTimePreKey {
     }
 }
 
-/// OneTimePreKey Manager
 pub struct OneTimePreKeyStore {
     pub(crate) keys: HashMap<u32, OneTimePreKey>,
     pub(crate) next_id: u32,
@@ -110,6 +127,7 @@ pub struct OneTimePreKeyStore {
 }
 
 impl OneTimePreKeyStore {
+    /// Creates a new one-time pre-key store with the specified maximum key count.
     pub(crate) fn new(max_keys: usize) -> Self {
         Self {
             keys: HashMap::new(),
@@ -118,6 +136,7 @@ impl OneTimePreKeyStore {
         }
     }
 
+    /// Generates a specified number of new one-time pre-keys.
     pub(crate) fn generate_keys(&mut self, count: usize) -> Vec<u32> {
         let mut ids = Vec::with_capacity(count);
         for _ in 0..count {
@@ -129,10 +148,12 @@ impl OneTimePreKeyStore {
         ids
     }
 
+    /// Retrieves a one-time pre-key by its ID without removing it from the store.
     pub(crate) fn get(&self, id: u32) -> Option<&OneTimePreKey> {
         self.keys.get(&id)
     }
 
+    /// Returns a map of all available pre-key IDs to their public keys.
     pub(crate) fn get_public_keys(&self) -> HashMap<u32, X25519PublicKey> {
         let mut indexed_pks = HashMap::new();
         self.keys.iter().for_each(|(idx, otpk)| {
@@ -142,14 +163,17 @@ impl OneTimePreKeyStore {
         indexed_pks
     }
 
+    /// Removes and returns a one-time pre-key by its ID.
     pub(crate) fn take(&mut self, id: u32) -> Option<OneTimePreKey> {
         self.keys.remove(&id)
     }
 
+    /// Returns the current number of pre-keys in the store.
     pub(crate) fn count(&self) -> usize {
         self.keys.len()
     }
 
+    /// Generates additional pre-keys to maintain the desired pool size.
     pub(crate) fn replenish(&mut self) -> Vec<u32> {
         let needed = self.max_keys.saturating_sub(self.keys.len());
         self.generate_keys(needed)

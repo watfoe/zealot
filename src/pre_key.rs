@@ -3,6 +3,11 @@ use ed25519_dalek::Verifier;
 use rand::TryRngCore;
 use rand::rngs::OsRng;
 
+/// A medium-term signed pre-key as defined in Signal's X3DH protocol.
+///
+/// In X3DH, signed pre-keys (SPK) are medium-term keys that are signed with
+/// the user's identity key to provide authentication. They are typically
+/// rotated periodically (e.g., weekly or monthly).
 pub struct SignedPreKey {
     pre_key: X25519Secret,
     id: u32, // for referencing this pre-key
@@ -10,6 +15,7 @@ pub struct SignedPreKey {
 }
 
 impl SignedPreKey {
+    /// Creates a new signed pre-key with the given ID.
     pub fn new(id: u32) -> Self {
         let mut seed = [0u8; 32];
         OsRng.try_fill_bytes(&mut seed).unwrap();
@@ -21,23 +27,30 @@ impl SignedPreKey {
         }
     }
 
+    /// Returns the public component of this signed pre-key.
     pub fn public_key(&self) -> X25519PublicKey {
         self.pre_key.public_key()
     }
 
+    /// Returns the complete key pair for this signed pre-key.
     pub fn key_pair(&self) -> X25519Secret {
         self.pre_key.clone()
     }
 
+    /// Returns the unique identifier for this signed pre-key.
     pub fn id(&self) -> u32 {
         self.id
     }
 
+    /// Performs a Diffie-Hellman key agreement with the other party's public key.
     pub fn dh(&self, public_key: &X25519PublicKey) -> [u8; 32] {
         self.pre_key.dh(public_key).to_bytes()
     }
 
-    // Generate a signature for this pre-key using the identity key
+    /// Generates a signature for this pre-key using the provided identity key.
+    ///
+    /// The signature proves that the signed pre-key belongs to the
+    /// owner of the identity key, providing authentication.
     pub fn signature(&self, identity_key: &IdentityKey) -> ed25519_dalek::Signature {
         let encoded = self.encode_for_signature();
         identity_key.sign(&encoded)
@@ -47,6 +60,12 @@ impl SignedPreKey {
         self.public_key().to_bytes()
     }
 
+    /// Serializes the signed pre-key to a 44-byte array for storage.
+    ///
+    /// The format is:
+    /// - 4 bytes: ID (big-endian u32)
+    /// - 8 bytes: Creation timestamp (big-endian u64 seconds since UNIX epoch)
+    /// - 32 bytes: X25519 key
     pub fn to_bytes(&self) -> [u8; 44] {
         let mut result = [0u8; 44];
 
@@ -69,7 +88,7 @@ impl SignedPreKey {
 }
 
 impl From<[u8; 44]> for SignedPreKey {
-    /// Load a signed pre key from a byte array.
+    /// Deserializes a signed pre-key from a 44-byte array.
     fn from(bytes: [u8; 44]) -> Self {
         // Extract the ID
         let mut id_bytes = [0u8; 4];
@@ -94,6 +113,13 @@ impl From<[u8; 44]> for SignedPreKey {
     }
 }
 
+/// A bundle of public keys used for X3DH key agreement.
+///
+/// A PreKeyBundle contains all the public key material needed by another user
+/// to establish a secure session asynchronously using the X3DH protocol:
+/// - Identity key for authentication and key agreement
+/// - Signed pre-key with signature for authenticated key agreement
+/// - Optional one-time pre-key for additional security
 pub struct PreKeyBundle {
     public_identity_key_dh: X25519PublicKey,
     public_identity_key_verifier: ed25519_dalek::VerifyingKey,
@@ -104,6 +130,7 @@ pub struct PreKeyBundle {
 }
 
 impl PreKeyBundle {
+    /// Creates a new pre-key bundle from the provided keys.
     pub fn new(
         identity_key: &IdentityKey,
         signed_pre_key: &SignedPreKey,
@@ -124,28 +151,41 @@ impl PreKeyBundle {
         }
     }
 
+    /// Verifies the bundle's signature to ensure authenticity.
+    ///
+    /// This verification confirms that the signed pre-key
+    /// was actually created by the owner of the identity key.
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) if the signature is valid, or an Error otherwise.
     pub fn verify(&self) -> Result<(), ed25519_dalek::ed25519::Error> {
         let encoded_key = self.public_signed_pre_key.to_bytes();
         self.public_identity_key_verifier
             .verify(&encoded_key, &self.signature)
     }
 
+    /// Returns the public signed pre-key (SPK_pub) from this bundle.
     pub fn public_signed_pre_key(&self) -> X25519PublicKey {
         self.public_signed_pre_key
     }
 
+    /// Returns the ID of the signed pre-key in this bundle.
     pub fn signed_pre_key_id(&self) -> u32 {
         self.signed_pre_key_id
     }
 
+    /// Returns the public identity key (IK_pub) for DH operations.
     pub fn public_identity_key(&self) -> X25519PublicKey {
         self.public_identity_key_dh
     }
 
+    /// Returns the public verification key for the identity.
     pub fn public_identity_key_verifier(&self) -> ed25519_dalek::VerifyingKey {
         self.public_identity_key_verifier
     }
 
+    /// Returns the optional one-time pre-key (OPK_pub) from this bundle.
     pub fn public_one_time_pre_key(&self) -> Option<X25519PublicKey> {
         self.public_one_time_pre_key
     }

@@ -1,6 +1,13 @@
 use crate::{DoubleRatchet, Error, RatchetMessage};
 
-/// Session management
+/// A secure messaging session between two parties.
+///
+/// A Session represents an established secure communication channel between
+/// two parties using the Signal Protocol. It encapsulates a Double Ratchet
+/// instance along with metadata about the session.
+///
+/// Sessions are typically created after a successful X3DH key agreement and
+/// are used to encrypt and decrypt messages between the two parties.
 pub struct Session {
     pub(crate) session_id: String,
     pub(crate) ratchet: DoubleRatchet,
@@ -10,6 +17,7 @@ pub struct Session {
 }
 
 impl Session {
+    /// Creates a new session with the given parameters.
     pub fn new(session_id: String, ratchet: DoubleRatchet, is_initiator: bool) -> Self {
         let now = std::time::SystemTime::now();
         Self {
@@ -21,13 +29,12 @@ impl Session {
         }
     }
 
-    /// A session ID is the SHA256 of the concatenation of three SessionKeys,
-    /// the account’s identity key, the ephemeral base key and the one-time key which
-    /// is used to establish the session.
+    /// Returns the unique session identifier.
     pub fn session_id(&self) -> String {
         self.session_id.clone()
     }
 
+    /// Encrypts a message using this session.
     pub fn encrypt(
         &mut self,
         plaintext: &[u8],
@@ -37,6 +44,7 @@ impl Session {
         self.ratchet.encrypt(plaintext, associated_data)
     }
 
+    /// Decrypts a message using this session.
     pub fn decrypt(
         &mut self,
         message: &RatchetMessage,
@@ -74,7 +82,7 @@ mod tests {
         let alice_ephemeral_public = alice_x3dh_result.public_key();
 
         // Alice initializes her Double Ratchet
-        let alice_ratchet = DoubleRatchet::initialize_as_first_sender(
+        let alice_ratchet = DoubleRatchet::initialize_for_alice(
             alice_x3dh_result.shared_secret(),
             &bob_bundle.public_signed_pre_key(),
         );
@@ -95,10 +103,8 @@ mod tests {
             .unwrap();
 
         // Bob initializes his Double Ratchet
-        let bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
-            bob_shared_secret,
-            bob_signed_pre_key.key_pair(),
-        );
+        let bob_ratchet =
+            DoubleRatchet::initialize_for_bob(bob_shared_secret, bob_signed_pre_key.key_pair());
 
         // Create a session ID for Bob
         let bob_session_id = format!("bob-to-alice-{}", rand::random::<u32>());

@@ -4,6 +4,7 @@ use ed25519_dalek::{SecretKey, SigningKey, Verifier, ed25519};
 use rand::TryRngCore;
 use rand::rngs::OsRng;
 
+/// Generates a cryptographically secure random 32-byte seed.
 pub fn generate_random_seed() -> Result<[u8; 32], Error> {
     let mut seed = [0u8; 32];
     OsRng.try_fill_bytes(&mut seed).map_err(|_| Error::Random)?;
@@ -14,12 +15,18 @@ fn generate_ed25519_signing_key(seed: [u8; 32]) -> SigningKey {
     SigningKey::from_bytes(&SecretKey::from(seed))
 }
 
+/// Long-term identity key pair that combines signing and key agreement capabilities.
+///
+/// An `IdentityKey` contains both an Ed25519 signing key for authentication and
+/// an X25519 key for Diffie-Hellman key agreement, derived from the same seed
+/// for security and convenience.
 pub struct IdentityKey {
     signing_key: SigningKey,
     dh_key: X25519Secret,
 }
 
 impl Default for IdentityKey {
+    /// Creates a new identity key with randomly generated components.
     fn default() -> Self {
         let seed = generate_random_seed().unwrap();
         let signing_key = generate_ed25519_signing_key(seed);
@@ -32,15 +39,21 @@ impl Default for IdentityKey {
 }
 
 impl IdentityKey {
+    /// Creates a new identity key with randomly generated components.
     pub fn new() -> Self {
         Self::default()
     }
 
-    // Method to sign data using the identity key
+    /// Signs a message using the Ed25519 signing key.
+    ///
+    /// # Returns
+    ///
+    /// An Ed25519 signature that can be verified with this identity's public key.
     pub fn sign(&self, message: &[u8]) -> ed25519_dalek::Signature {
         self.signing_key.sign(message)
     }
 
+    /// Verifies a signature using this identity's public key.
     pub fn verify(
         &self,
         message: &[u8],
@@ -50,20 +63,29 @@ impl IdentityKey {
         verifying_key.verify(message, signature)
     }
 
-    // Get the public Ed25519 verifying key
+    /// Returns the public Ed25519 verification key corresponding to this identity.
     pub fn public_signing_key(&self) -> ed25519_dalek::VerifyingKey {
         self.signing_key.verifying_key()
     }
 
-    // Get the public X25519 key for DH operations
+    /// Returns the public X25519 key for Diffie-Hellman operations.
     pub fn public_dh_key(&self) -> X25519PublicKey {
         self.dh_key.public_key()
     }
 
+    /// Performs a Diffie-Hellman key agreement with another party's public key.
+    ///
+    /// # Returns
+    ///
+    /// A 32-byte array shared secret that both parties can derive.
     pub fn dh(&self, public_key: &X25519PublicKey) -> [u8; 32] {
         self.dh_key.dh(public_key).to_bytes()
     }
 
+    /// Serializes the identity key to a 64-byte array.
+    ///
+    /// The first 32 bytes contain the Ed25519 private key,
+    /// and the last 32 bytes contain the X25519 private key.
     pub fn to_bytes(&self) -> [u8; 64] {
         let mut bytes = [0u8; 64];
         bytes[0..32].copy_from_slice(self.signing_key.as_bytes().as_slice());
@@ -74,6 +96,7 @@ impl IdentityKey {
 }
 
 impl From<[u8; 64]> for IdentityKey {
+    /// Deserializes an identity key from a 64-byte array.
     fn from(bytes: [u8; 64]) -> Self {
         let mut private_sk_bytes = [0u8; 32];
         private_sk_bytes.copy_from_slice(&bytes[0..32]);

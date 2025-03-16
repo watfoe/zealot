@@ -9,7 +9,7 @@ use crate::{
 
 const SALT: &[u8] = b"Zealot-E2E-NaCl";
 
-pub struct EphemeralKey {
+pub(crate) struct EphemeralKey {
     key: X25519Secret,
 }
 
@@ -22,15 +22,15 @@ impl Default for EphemeralKey {
 }
 
 impl EphemeralKey {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub fn public_key(&self) -> X25519PublicKey {
+    pub(crate) fn public_key(&self) -> X25519PublicKey {
         self.key.public_key()
     }
 
-    pub fn dh(&self, public: &X25519PublicKey) -> [u8; 32] {
+    pub(crate) fn dh(&self, public: &X25519PublicKey) -> [u8; 32] {
         self.key.dh(public).to_bytes()
     }
 }
@@ -41,33 +41,58 @@ impl Drop for EphemeralKey {
     }
 }
 
+/// The result of an X3DH key agreement initiated by A.
+///
+/// Contains both the calculated shared secret and A's ephemeral public key
+/// that needs to be transmitted to B.
 pub struct X3DHResult {
     shared_secret: [u8; 32],
     ephemeral_public: X25519PublicKey, // A's ephemeral public key (sent to B)
 }
 
 impl X3DHResult {
+    /// Returns the ephemeral public key that needs to be sent to the responder.
     pub fn public_key(&self) -> X25519PublicKey {
         self.ephemeral_public
     }
 
+    /// Consumes the result and returns only the shared secret.
+    ///
+    /// This should be called only after the ephemeral public key has been
+    /// transmitted to the responder.
     pub fn shared_secret(self) -> [u8; 32] {
         self.shared_secret
     }
 }
 
+/// Implementation of the X3DH (Extended Triple Diffie-Hellman) key agreement protocol.
+///
+/// X3DH enables two parties to establish a shared secret asynchronously, even if one
+/// party is offline. The protocol combines multiple Diffie-Hellman exchanges to provide
+/// strong security properties.
 pub struct X3DH {
     info: Vec<u8>, // Application-specific info for the KDF
 }
 
 impl X3DH {
+    /// Creates a new X3DH protocol instance with the specified application info.
+    ///
+    /// The info parameter is used as context for the HKDF key derivation, ensuring
+    /// that keys derived in different contexts will be different even if the same
+    /// key material is used.
     pub fn new(info: &[u8]) -> Self {
         Self {
             info: info.to_vec(),
         }
     }
 
-    // A initiates the key agreement with B's bundle
+    /// Initiates a key agreement with a responder's pre-key bundle.
+    ///
+    /// This implements Alice's side of the X3DH protocol:
+    /// 1. Verifies Bob's signed pre-key
+    /// 2. Generates an ephemeral key pair
+    /// 3. Performs the necessary DH computations
+    /// 4. Derives the shared secret
     pub fn initiate(
         &self,
         a_identity: &IdentityKey,
@@ -97,7 +122,11 @@ impl X3DH {
         Ok(result)
     }
 
-    // B processes the message from A
+    /// Processes an initiation message from the initiator (Alice).
+    ///
+    /// This implements Bob's side of the X3DH protocol:
+    /// 1. Performs the same DH computations as Alice did
+    /// 2. Derives the same shared secret
     pub fn process_initiation(
         &self,
         b_identity: &IdentityKey,

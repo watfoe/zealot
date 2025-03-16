@@ -8,6 +8,9 @@ use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
+/// An `Account` represents a user in the Signal Protocol ecosystem, managing
+/// identity keys, pre-keys, and established sessions. It provides methods for
+/// creating and managing secure communication sessions with other users.
 pub struct Account {
     pub(crate) ik: IdentityKey,
     pub(crate) spk: SignedPreKey,
@@ -18,6 +21,9 @@ pub struct Account {
 }
 
 impl Account {
+    /// Creates a new account with the given configuration.
+    ///
+    /// If no configuration is provided, default values are used.
     pub fn new(config: Option<AccountConfig>) -> Self {
         let config = config.unwrap_or_default();
 
@@ -38,8 +44,8 @@ impl Account {
         }
     }
 
-    // Get the pre-key bundle for sharing with others
-    pub fn pre_key_bundle(&mut self) -> (PreKeyBundle, HashMap<u32, X25519PublicKey>) {
+    /// Returns the pre-key bundle and one-time pre-keys for this account.
+    pub fn prekey_bundle(&mut self) -> (PreKeyBundle, HashMap<u32, X25519PublicKey>) {
         self.maybe_rotate_spk();
         self.maybe_replenish_otpk_store();
 
@@ -48,11 +54,19 @@ impl Account {
         (PreKeyBundle::new(&self.ik, &self.spk, None), otpks)
     }
 
+    /// Returns the configuration for this account.
     pub fn config(&self) -> AccountConfig {
         self.config.clone()
     }
 
-    pub fn initiate_session(&mut self, their_bundle: &PreKeyBundle) -> Result<String, Error> {
+    /// Initiates a new session with another user (Bob).
+    ///
+    /// This implements the initiator's (Alice's) side of the X3DH protocol,
+    /// using the pre-key bundle retrieved from the other user (Bob).
+    pub fn create_outbound_session(
+        &mut self,
+        their_bundle: &PreKeyBundle,
+    ) -> Result<String, Error> {
         let x3dh = X3DH::new(&self.config.protocol_info);
         let x3dh_result = x3dh.initiate(&self.ik, their_bundle)?;
 
@@ -61,7 +75,7 @@ impl Account {
             &x3dh_result.public_key(),
         );
 
-        let ratchet = DoubleRatchet::initialize_as_first_sender(
+        let ratchet = DoubleRatchet::initialize_for_alice(
             x3dh_result.shared_secret(),
             &their_bundle.public_signed_pre_key(),
         );
@@ -73,15 +87,18 @@ impl Account {
         Ok(session_id)
     }
 
-    // Process an incoming session initiation
-    pub fn process_session_initiation(
+    /// Processes an incoming session initiation from another user (Alice).
+    ///
+    /// This implements the responder's (Bob's) side of the X3DH protocol,
+    /// using the identity key, ephemeral key, and pre-key IDs from the
+    /// initiator (Alice).
+    pub fn create_inbound_session(
         &mut self,
         their_ik: &X25519PublicKey,
         their_ephemeral_key: &X25519PublicKey,
         spk_id: u32,
         one_time_pre_key_id: Option<u32>,
     ) -> Result<String, Error> {
-        // Verify we have the required keys
         if self.spk.id() != spk_id {
             return Err(Error::PreKey("Invalid signed pre-key ID".to_string()));
         }
@@ -108,8 +125,7 @@ impl Account {
         )?;
 
         // Initialize Double Ratchet
-        let ratchet =
-            DoubleRatchet::initialize_as_first_receiver(shared_secret, self.spk.key_pair());
+        let ratchet = DoubleRatchet::initialize_for_bob(shared_secret, self.spk.key_pair());
 
         // Create a unique session ID
         let session_id = self.derive_session_id(their_ik, their_ephemeral_key);
@@ -125,13 +141,13 @@ impl Account {
         Ok(session_id)
     }
 
-    // Get an existing session by ID
-    pub fn get_session(&self, session_id: &str) -> Option<&Session> {
+    /// Returns a reference to a session by its ID.
+    pub fn session(&self, session_id: &str) -> Option<&Session> {
         self.sessions.get(session_id)
     }
 
-    // Get a mutable reference to an existing session
-    pub fn get_session_mut(&mut self, session_id: &str) -> Option<&mut Session> {
+    /// Returns a mutable reference to a session by its ID.
+    pub fn session_mut(&mut self, session_id: &str) -> Option<&mut Session> {
         self.sessions.get_mut(session_id)
     }
 
@@ -156,7 +172,11 @@ impl Account {
         }
     }
 
-    // Derive a unique session ID from identities
+    /// Derive a unique session ID from identities
+    ///
+    /// A session ID is the SHA256 of the concatenation of three SessionKeys,
+    /// the account’s identity key, the ephemeral base key and the one-time key which
+    /// is used to establish the session.
     fn derive_session_id(
         &self,
         their_identity: &X25519PublicKey,
@@ -222,7 +242,7 @@ mod tests {
         let mut account = Account::new(None);
 
         // Get key bundle and verify it contains the expected components
-        let (bundle, one_time_keys) = account.pre_key_bundle();
+        let (bundle, one_time_keys) = account.prekey_bundle();
 
         // Verify bundle properties
         assert!(
@@ -244,29 +264,18 @@ mod tests {
         let mut bob_account = Account::new(None);
 
         // Get Bob's key bundle
-        let (bob_bundle, _) = bob_account.pre_key_bundle();
+        let (bob_bundle, _) = bob_account.prekey_bundle();
 
         // Alice initiates a session with Bob
-        let alice_session_id = alice_account.initiate_session(&bob_bundle).unwrap();
+        let alice_session_id = alice_account.create_outbound_session(&bob_bundle).unwrap();
 
         // Verify session was created and stored
-        assert!(alice_account.get_session(&alice_session_id).is_some());
+        assert!(alice_account.session(&alice_session_id).is_some());
 
         // Send a message from Alice to Bob
-        let alice_session = alice_account.get_session_mut(&alice_session_id).unwrap();
+        let alice_session = alice_account.session_mut(&alice_session_id).unwrap();
         let message = "Hello Bob!";
         let encrypted = alice_session.encrypt(message.as_bytes(), b"AD").unwrap();
-
-        // Simulate Bob processing the initial message
-        // In a real-world scenario, this would involve sending Alice's identity key,
-        // ephemeral key, and the encrypted message over a network
-
-        // For test purposes, assume these were transmitted and Bob creates a session
-        // Get Alice's identity key and ephemeral key from her session
-        // Then process the session initiation and store it
-
-        // This is a simplified test - in reality this would involve
-        // message transmission with more fields
     }
 
     #[test]
@@ -278,12 +287,12 @@ mod tests {
 
         let mut account = Account::new(Some(config));
 
-        let (initial_bundle, _) = account.pre_key_bundle();
+        let (initial_bundle, _) = account.prekey_bundle();
         let initial_spk_id = initial_bundle.signed_pre_key_id();
 
         std::thread::sleep(Duration::from_millis(10));
 
-        let (new_bundle, _) = account.pre_key_bundle();
+        let (new_bundle, _) = account.prekey_bundle();
         let new_spk_id = new_bundle.signed_pre_key_id();
 
         assert_ne!(

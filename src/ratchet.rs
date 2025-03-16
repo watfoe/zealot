@@ -30,7 +30,17 @@ where
     })
 }
 
-/// Double Ratchet implementation
+/// Double Ratchet implementation for the Signal Protocol.
+///
+/// The Double Ratchet algorithm provides forward secrecy (compromise of current keys
+/// does not compromise past messages) and break-in recovery (compromise of current
+/// keys does not compromise future messages as long as a DH ratchet step happens).
+///
+/// It manages:
+/// - A root key that evolves with each DH ratchet step
+/// - Separate sending and receiving chain keys for message encryption
+/// - Header encryption keys for authentication
+/// - Skipped message keys for out-of-order message delivery
 #[derive(Clone)]
 pub struct DoubleRatchet {
     pub(crate) state: RatchetState,
@@ -60,8 +70,11 @@ impl DoubleRatchet {
         self.state.dh_pair.public_key()
     }
 
-    /// Initialize a ratchet as the first sender (Alice)
-    pub fn initialize_as_first_sender(
+    /// Initializes a ratchet for the initiator (Alice).
+    ///
+    /// This is typically called by Alice after the X3DH key agreement,
+    /// using the shared secret from X3DH and Bob's signed pre-key.
+    pub fn initialize_for_alice(
         mut shared_secret: [u8; 32],
         receiver_public_key: &X25519PublicKey,
     ) -> Self {
@@ -72,8 +85,10 @@ impl DoubleRatchet {
         let (new_root_key, chain_key, next_sending_header_key) =
             Self::kdf_rk_he(&shared_secret, dh_output);
 
-        let (header_key_a, next_header_key_b) = DoubleRatchet::derive_initial_keys(shared_secret);
+        let (header_key_a, next_header_key_b) =
+            DoubleRatchet::derive_initial_header_keys(shared_secret);
 
+        // Securely erase the shared secret
         shared_secret.zeroize();
 
         // Initialize chains
@@ -99,9 +114,13 @@ impl DoubleRatchet {
         }
     }
 
-    /// Initialize a ratchet as the first receiver (Bob)
-    pub fn initialize_as_first_receiver(shared_secret: [u8; 32], dh_pair: X25519Secret) -> Self {
-        let (header_key_a, next_header_key_b) = DoubleRatchet::derive_initial_keys(shared_secret);
+    /// Initializes a ratchet for the responder (Bob).
+    ///
+    /// This is typically called by Bob after processing
+    /// the X3DH key agreement initiated by Alice.
+    pub fn initialize_for_bob(shared_secret: [u8; 32], dh_pair: X25519Secret) -> Self {
+        let (header_key_a, next_header_key_b) =
+            DoubleRatchet::derive_initial_header_keys(shared_secret);
 
         Self {
             state: RatchetState {
@@ -123,7 +142,7 @@ impl DoubleRatchet {
         }
     }
 
-    fn derive_initial_keys(shared_secret: [u8; 32]) -> ([u8; 32], [u8; 32]) {
+    fn derive_initial_header_keys(shared_secret: [u8; 32]) -> ([u8; 32], [u8; 32]) {
         let hkdf = Hkdf::<Sha256>::new(None, &shared_secret);
 
         let mut header_key_a = [0u8; 32];
@@ -137,7 +156,14 @@ impl DoubleRatchet {
         (header_key_a, next_header_key_b)
     }
 
-    /// Key derivation function for the root key
+    /// Key derivation function for the root key ratchet with header encyption.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing:
+    /// 1. The new root key
+    /// 2. The new chain key
+    /// 3. The next header encryption key
     fn kdf_rk_he(
         root_key: &[u8; 32],
         mut dh_output: SharedSecret,
@@ -162,7 +188,13 @@ impl DoubleRatchet {
         (new_root_key, chain_key, next_header_key)
     }
 
-    /// Encrypt a message
+    /// Encrypts a message using the Double Ratchet algorithm.
+    ///
+    /// This performs the following steps:
+    /// 1. Generates a message key from the sending chain
+    /// 2. Encrypts the message header with the header key
+    /// 3. Encrypts the message with the message key
+    /// 4. Increments the sending chain message counter
     pub fn encrypt(
         &mut self,
         plaintext: &[u8],
@@ -190,6 +222,7 @@ impl DoubleRatchet {
         })
     }
 
+    /// Encrypts a message header.
     fn encrypt_header(&self, header: &MessageHeader) -> Result<Vec<u8>, Error> {
         if let Some(hk) = self.state.sending_header_key {
             let header_bytes = header.to_bytes();
@@ -219,7 +252,14 @@ impl DoubleRatchet {
         }
     }
 
-    /// Decrypt a message
+    /// Decrypts a message using the Double Ratchet algorithm.
+    ///
+    /// This performs the following steps:
+    /// 1. Tries to decrypt with skipped message keys first
+    /// 2. Decrypts the message header
+    /// 3. Performs a DH ratchet step if needed
+    /// 4. Generates any skipped message keys
+    /// 5. Derives the message key and decrypts the message
     pub fn decrypt(
         &mut self,
         message: &RatchetMessage,
@@ -276,7 +316,7 @@ impl DoubleRatchet {
         Ok(plaintext)
     }
 
-    /// Decrypt a header with a given header key
+    /// Decrypts a message header using a specific header key.
     fn decrypt_header(&self, encrypted_header: &[u8], hk: &[u8; 32]) -> Option<MessageHeader> {
         if encrypted_header.len() < 12 {
             return None;
@@ -303,7 +343,9 @@ impl DoubleRatchet {
         }
     }
 
-    /// Try to decrypt a header with current and next header keys
+    /// Tries to decrypt a header with both current and next header keys.
+    ///
+    /// This allows for recovery if a header key rotation has happened.
     fn try_decrypt_header(&mut self, encrypted_header: &[u8]) -> Result<MessageHeader, Error> {
         if let Some(rhk) = self.state.receiving_header_key {
             if let Some(header) = self.decrypt_header(encrypted_header, &rhk) {
@@ -320,6 +362,9 @@ impl DoubleRatchet {
         Err(Error::Protocol("Failed to decrypt header".to_string()))
     }
 
+    /// Tries to decrypt a message using previously skipped message keys.
+    ///
+    /// This is used for handling out-of-order messages.
     fn try_skipped_message_keys(
         &mut self,
         message: &RatchetMessage,
@@ -347,7 +392,7 @@ impl DoubleRatchet {
         Ok(None)
     }
 
-    /// Performs a DH ratchet step
+    /// Performs a Diffie-Hellman ratchet step.
     fn dh_ratchet(&mut self, header: &MessageHeader) -> Result<(), Error> {
         self.state.previous_sending_chain_length = self.state.sending_chain.get_index();
 
@@ -383,6 +428,11 @@ impl DoubleRatchet {
         Ok(())
     }
 
+    /// Generates and stores skipped message keys.
+    ///
+    /// When receiving a message with a higher message number than expected,
+    /// this method generates all the intermediate message keys to maintain
+    /// security and allow for later decryption of out-of-order messages.
     fn skip_message_keys(&mut self, until: u32) -> Result<(), Error> {
         if self.state.receiving_message_number + self.max_skip < until {
             return Err(Error::Protocol("Too many skipped messages".to_string()));
@@ -485,10 +535,9 @@ mod tests {
 
         // Initialize ratchets
         let alice_ratchet =
-            DoubleRatchet::initialize_as_first_sender(shared_secret, &bob_spk.public_key());
+            DoubleRatchet::initialize_for_alice(shared_secret, &bob_spk.public_key());
 
-        let bob_ratchet =
-            DoubleRatchet::initialize_as_first_receiver(shared_secret, bob_spk.key_pair());
+        let bob_ratchet = DoubleRatchet::initialize_for_bob(shared_secret, bob_spk.key_pair());
 
         (alice_ratchet, bob_ratchet)
     }
@@ -649,7 +698,7 @@ mod tests {
         let alice_x3dh_result = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
         let alice_public_key = alice_x3dh_result.public_key();
         // 4. Alice initializes her Double Ratchet with the shared secret
-        let mut alice_ratchet = DoubleRatchet::initialize_as_first_sender(
+        let mut alice_ratchet = DoubleRatchet::initialize_for_alice(
             alice_x3dh_result.shared_secret(),
             &bob_bundle.public_signed_pre_key(),
         );
@@ -664,10 +713,8 @@ mod tests {
             )
             .unwrap();
         // 6. Bob initializes his Double Ratchet with the shared secret
-        let mut bob_ratchet = DoubleRatchet::initialize_as_first_receiver(
-            bob_shared_secret,
-            bob_signed_pre_key.key_pair(),
-        );
+        let mut bob_ratchet =
+            DoubleRatchet::initialize_for_bob(bob_shared_secret, bob_signed_pre_key.key_pair());
         // 7. Test message exchange
         let message = "This is a secure message using X3DH + Double Ratchet!";
         let encrypted = alice_ratchet.encrypt(message.as_bytes(), b"AD").unwrap();
