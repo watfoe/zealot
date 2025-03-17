@@ -1,14 +1,100 @@
 use crate::chain::Chain;
 use crate::state::RatchetState;
 use crate::{
-    Account, AccountConfig, DoubleRatchet, Error, IdentityKey, OneTimePreKey, Session,
-    SignedPreKey, X25519PublicKey, X25519Secret,
+    Account, AccountConfig, DoubleRatchet, Error, IdentityKey, OneTimePreKey, PreKeyBundle,
+    Session, SignedPreKey, X25519PublicKey, X25519Secret,
 };
+use ed25519_dalek::ed25519::SignatureBytes;
+use ed25519_dalek::{Signature, VerifyingKey};
 use prost::Message;
 use std::collections::HashMap;
 use std::time::{Duration, UNIX_EPOCH};
 
 include!(concat!(env!("OUT_DIR"), "/zealot.rs"));
+
+impl PreKeyBundle {
+    pub fn serialize(&self) -> Result<Vec<u8>, Error> {
+        let prekey_proto = PreKeyBundleProto {
+            public_identity_key_dh: self.public_identity_key_dh.to_bytes().to_vec(),
+            public_identity_key_verifier: self.public_identity_key_verifier.to_bytes().to_vec(),
+            signed_pre_key_id: self.signed_pre_key_id,
+            public_signed_pre_key: self.public_signed_pre_key.to_bytes().to_vec(),
+            signature: self.signature.to_vec(),
+            public_one_time_pre_key: self
+                .public_one_time_pre_key
+                .map(|otpk| otpk.to_bytes().to_vec()),
+        };
+
+        let mut buf = Vec::new();
+        prekey_proto
+            .encode(&mut buf)
+            .map_err(|e| Error::Serde(format!("Failed to encode pre-key: {}", e)))?;
+
+        Ok(buf)
+    }
+
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
+        let prekey_proto = PreKeyBundleProto::decode(bytes)
+            .map_err(|e| Error::Serde(format!("Failed to decode account: {}", e)))?;
+
+        if prekey_proto.public_identity_key_dh.len() != 32 {
+            return Err(Error::Serde(
+                "Invalid public diffie-hellman identity key length".to_string(),
+            ));
+        }
+        let mut pub_ik_bytes = [0u8; 32];
+        pub_ik_bytes.copy_from_slice(&prekey_proto.public_identity_key_dh);
+        let public_identity_key_dh = X25519PublicKey::from(pub_ik_bytes);
+
+        if prekey_proto.public_identity_key_verifier.len() != 32 {
+            return Err(Error::Serde(
+                "Invalid public identity key verifier length".to_string(),
+            ));
+        }
+        let mut pub_ikv_bytes = [0u8; 32];
+        pub_ikv_bytes.copy_from_slice(&prekey_proto.public_identity_key_verifier);
+        let public_identity_key_verifier = VerifyingKey::from_bytes(&pub_ikv_bytes)
+            .map_err(|err| Error::Serde(err.to_string()))?;
+
+        if prekey_proto.public_signed_pre_key.len() != 32 {
+            return Err(Error::Serde(
+                "Invalid public signed pre-key length".to_string(),
+            ));
+        }
+        let mut pub_spk_bytes = [0u8; 32];
+        pub_spk_bytes.copy_from_slice(&prekey_proto.public_signed_pre_key);
+        let public_signed_pre_key = X25519PublicKey::from(pub_spk_bytes);
+
+        if prekey_proto.signature.len() != 64 {
+            return Err(Error::Serde("Invalid signature length".to_string()));
+        }
+        let mut signature_bytes = [0u8; 64];
+        signature_bytes.copy_from_slice(&prekey_proto.signature);
+        let signature = Signature::from(SignatureBytes::from(signature_bytes));
+
+        let public_one_time_pre_key = if let Some(otpk) = prekey_proto.public_one_time_pre_key {
+            if otpk.len() < 32 {
+                return Err(Error::Serde("Invalid One-Time Pre-Key length".to_string()));
+            }
+
+            let mut otpk_bytes = [0u8; 32];
+            otpk_bytes.copy_from_slice(&otpk);
+
+            Some(X25519PublicKey::from(otpk_bytes))
+        } else {
+            None
+        };
+
+        Ok(Self {
+            public_identity_key_dh,
+            public_identity_key_verifier,
+            signed_pre_key_id: prekey_proto.signed_pre_key_id,
+            public_signed_pre_key,
+            signature,
+            public_one_time_pre_key,
+        })
+    }
+}
 
 impl Account {
     /// Serialize the account to Protocol Buffers format
@@ -163,7 +249,9 @@ impl Session {
             ratchet: Some(serialize_ratchet(&self.ratchet)?),
             created_at: created_at_secs,
             last_used_at: last_used_at_secs,
-            public_initiator_ephemeral_key: self.public_initiator_ephemeral_key.map(|key| key.to_bytes().to_vec()),
+            public_initiator_ephemeral_key: self
+                .public_initiator_ephemeral_key
+                .map(|key| key.to_bytes().to_vec()),
         })
     }
 
@@ -381,6 +469,9 @@ mod tests {
         SignedPreKey, X3DH,
     };
     use std::time::Duration;
+    use prost::Message;
+
+    include!(concat!(env!("OUT_DIR"), "/zealot.rs"));
 
     fn create_test_session_pair() -> (Session, Session) {
         // Set up identities and pre-keys
@@ -396,20 +487,17 @@ mod tests {
             Some(&bob_one_time_pre_key),
         );
 
-        // Alice performs X3DH with Bob's bundle
         let x3dh = X3DH::new(b"Test-Session-Protocol");
         let alice_x3dh_result = x3dh
             .initiate_for_alice(&alice_identity, &bob_bundle)
             .unwrap();
         let alice_ephemeral_public = alice_x3dh_result.public_key();
 
-        // Alice initializes her Double Ratchet
         let alice_ratchet = DoubleRatchet::initialize_for_alice(
             alice_x3dh_result.shared_secret(),
             &bob_bundle.public_signed_pre_key(),
         );
 
-        // Create a session ID for Alice
         let alice_session_id = format!("alice-to-bob-{}", rand::random::<u32>());
         let alice_session = Session::new(
             alice_session_id,
@@ -417,7 +505,6 @@ mod tests {
             Some(alice_ephemeral_public),
         );
 
-        // Bob processes Alice's initiation
         let bob_shared_secret = x3dh
             .initiate_for_bob(
                 &bob_identity,
@@ -428,11 +515,9 @@ mod tests {
             )
             .unwrap();
 
-        // Bob initializes his Double Ratchet
         let bob_ratchet =
             DoubleRatchet::initialize_for_bob(bob_shared_secret, bob_signed_pre_key.key_pair());
 
-        // Create a session ID for Bob
         let bob_session_id = format!("bob-to-alice-{}", rand::random::<u32>());
         let bob_session = Session::new(bob_session_id, bob_ratchet, None);
 
@@ -450,7 +535,6 @@ mod tests {
         };
         let mut account = Account::new(Some(config));
 
-        // Create a session for the account
         let bob_identity = IdentityKey::new();
         let bob_signed_pre_key = SignedPreKey::new(1);
         let bob_bundle = PreKeyBundle::new(&bob_identity, &bob_signed_pre_key, None);
@@ -470,7 +554,10 @@ mod tests {
 
         assert_eq!(
             ik_pub.as_bytes(),
-            deserialized_account.identity_key().public_dh_key().as_bytes(),
+            deserialized_account
+                .identity_key()
+                .public_dh_key()
+                .as_bytes(),
             "Identity keys should match"
         );
 
@@ -481,18 +568,22 @@ mod tests {
         );
 
         assert_eq!(
-            max_skipped_msgs, deserialized_account.config().max_skipped_messages,
+            max_skipped_msgs,
+            deserialized_account.config().max_skipped_messages,
             "Config max_skipped_messages should match"
         );
 
         assert_eq!(
             spk_rotation_interval,
-            deserialized_account.config().signed_pre_key_rotation_interval,
+            deserialized_account
+                .config()
+                .signed_pre_key_rotation_interval,
             "Config rotation interval should match"
         );
 
         assert_eq!(
-            protocol_info, deserialized_account.config().protocol_info,
+            protocol_info,
+            deserialized_account.config().protocol_info,
             "Protocol info should match"
         );
 
@@ -550,7 +641,6 @@ mod tests {
     fn test_out_of_order_messages_after_serialization() {
         let (mut alice_session, mut bob_session) = create_test_session_pair();
 
-        // Alice sends multiple messages
         let messages = vec![
             "Message 1",
             "Message 2",
@@ -566,14 +656,11 @@ mod tests {
             encrypted_messages.push(alice_session.encrypt(msg.as_bytes(), ad).unwrap());
         }
 
-        // Bob receives first message normally
         let decrypted1 = bob_session.decrypt(&encrypted_messages[0], ad).unwrap();
         assert_eq!(String::from_utf8(decrypted1).unwrap(), messages[0]);
 
-        // Serialize Bob's session
         let bob_serialized = bob_session.serialize().unwrap();
 
-        // Deserialize to a new session
         let mut bob_deserialized = Session::deserialize(bob_serialized).unwrap();
 
         // Receive messages out of order in the deserialized session
@@ -602,7 +689,6 @@ mod tests {
     fn test_skipped_message_keys_serialization() {
         let (mut alice_session, mut bob_session) = create_test_session_pair();
 
-        // Alice sends multiple messages
         let messages = vec![
             "Message 1",
             "Message 2",
@@ -618,14 +704,11 @@ mod tests {
             encrypted_messages.push(alice_session.encrypt(msg.as_bytes(), ad).unwrap());
         }
 
-        // Bob receives first message
         let decrypted1 = bob_session.decrypt(&encrypted_messages[0], ad).unwrap();
         assert_eq!(String::from_utf8(decrypted1).unwrap(), messages[0]);
 
-        // Serialize Bob's session after receiving first message
         let bob_serialized = bob_session.serialize().unwrap();
 
-        // Deserialize to a new session
         let mut bob_deserialized = Session::deserialize(bob_serialized).unwrap();
 
         // Skip to message 4, which should store messages 2 and 3 in skipped keys
@@ -640,7 +723,6 @@ mod tests {
             .unwrap();
         assert_eq!(String::from_utf8(decrypted2).unwrap(), messages[1]);
 
-        // And message 3
         let decrypted3 = bob_deserialized
             .decrypt(&encrypted_messages[2], ad)
             .unwrap();
@@ -651,7 +733,6 @@ mod tests {
     fn test_dh_ratchet_after_serialization() {
         let (mut alice_session, mut bob_session) = create_test_session_pair();
 
-        // Exchange a few messages to advance the ratchet
         let messages = vec![
             "Alice message 1",
             "Bob response 1",
@@ -661,21 +742,17 @@ mod tests {
 
         let ad = b"ratchet-test";
 
-        // First message from Alice to Bob
         let encrypted1 = alice_session.encrypt(messages[0].as_bytes(), ad).unwrap();
         let decrypted1 = bob_session.decrypt(&encrypted1, ad).unwrap();
         assert_eq!(String::from_utf8(decrypted1).unwrap(), messages[0]);
 
-        // Response from Bob to Alice
         let encrypted2 = bob_session.encrypt(messages[1].as_bytes(), ad).unwrap();
         let decrypted2 = alice_session.decrypt(&encrypted2, ad).unwrap();
         assert_eq!(String::from_utf8(decrypted2).unwrap(), messages[1]);
 
-        // Serialize both sessions
         let alice_serialized = alice_session.serialize().unwrap();
         let bob_serialized = bob_session.serialize().unwrap();
 
-        // Deserialize
         let mut alice_deserialized = Session::deserialize(alice_serialized).unwrap();
         let mut bob_deserialized = Session::deserialize(bob_serialized).unwrap();
 
@@ -691,5 +768,236 @@ mod tests {
             .unwrap();
         let decrypted4 = alice_deserialized.decrypt(&encrypted4, ad).unwrap();
         assert_eq!(String::from_utf8(decrypted4).unwrap(), messages[3]);
+    }
+
+    #[test]
+    fn test_prekey_bundle_serialization_without_otpk() {
+        let identity_key = IdentityKey::new();
+        let signed_pre_key = SignedPreKey::new(42);
+
+        let bundle = PreKeyBundle::new(&identity_key, &signed_pre_key, None);
+
+        let serialized = bundle.serialize().expect("Failed to serialize");
+        let deserialized = PreKeyBundle::deserialize(&serialized).expect("Failed to deserialize");
+
+        assert_eq!(
+            bundle.public_identity_key().as_bytes(),
+            deserialized.public_identity_key().as_bytes(),
+            "Identity keys should match"
+        );
+
+        assert_eq!(
+            bundle.public_identity_key_verifier().to_bytes(),
+            deserialized.public_identity_key_verifier().to_bytes(),
+            "Identity key verifiers should match"
+        );
+
+        assert_eq!(
+            bundle.signed_pre_key_id(),
+            deserialized.signed_pre_key_id(),
+            "Signed pre-key IDs should match"
+        );
+
+        assert_eq!(
+            bundle.public_signed_pre_key().as_bytes(),
+            deserialized.public_signed_pre_key().as_bytes(),
+            "Signed pre-key public keys should match"
+        );
+
+        assert_eq!(
+            bundle.signature.to_bytes(),
+            deserialized.signature.to_bytes(),
+            "Signatures should match"
+        );
+
+        assert!(
+            deserialized.public_one_time_pre_key().is_none(),
+            "One-time pre-key should be None"
+        );
+    }
+
+    #[test]
+    fn test_prekey_bundle_serialization_with_otpk() {
+        let identity_key = IdentityKey::new();
+        let signed_pre_key = SignedPreKey::new(99);
+        let one_time_pre_key = OneTimePreKey::new(123);
+
+        let bundle = PreKeyBundle::new(&identity_key, &signed_pre_key, Some(&one_time_pre_key));
+
+        let serialized = bundle.serialize().expect("Failed to serialize");
+        let deserialized = PreKeyBundle::deserialize(&serialized).expect("Failed to deserialize");
+
+        assert_eq!(
+            bundle.public_identity_key().as_bytes(),
+            deserialized.public_identity_key().as_bytes(),
+            "Identity keys should match"
+        );
+
+        assert_eq!(
+            bundle.public_identity_key_verifier().to_bytes(),
+            deserialized.public_identity_key_verifier().to_bytes(),
+            "Identity key verifiers should match"
+        );
+
+        assert_eq!(
+            bundle.signed_pre_key_id(),
+            deserialized.signed_pre_key_id(),
+            "Signed pre-key IDs should match"
+        );
+
+        assert_eq!(
+            bundle.public_signed_pre_key().as_bytes(),
+            deserialized.public_signed_pre_key().as_bytes(),
+            "Signed pre-key public keys should match"
+        );
+
+        assert_eq!(
+            bundle.signature.to_bytes(),
+            deserialized.signature.to_bytes(),
+            "Signatures should match"
+        );
+
+        assert!(
+            deserialized.public_one_time_pre_key().is_some(),
+            "One-time pre-key should be Some"
+        );
+
+        assert_eq!(
+            bundle.public_one_time_pre_key().unwrap().as_bytes(),
+            deserialized.public_one_time_pre_key().unwrap().as_bytes(),
+            "One-time pre-key values should match"
+        );
+    }
+
+    #[test]
+    fn test_prekey_bundle_verification_after_serialization() {
+        let identity_key = IdentityKey::new();
+        let signed_pre_key = SignedPreKey::new(77);
+
+        let bundle = PreKeyBundle::new(&identity_key, &signed_pre_key, None);
+
+        assert!(bundle.verify().is_ok(), "Original bundle should verify");
+
+        let serialized = bundle.serialize().expect("Failed to serialize");
+        let deserialized = PreKeyBundle::deserialize(&serialized).expect("Failed to deserialize");
+
+        assert!(
+            deserialized.verify().is_ok(),
+            "Deserialized bundle should verify"
+        );
+    }
+
+    #[test]
+    fn test_prekey_bundle_serialized_size() {
+        let identity_key = IdentityKey::new();
+        let signed_pre_key = SignedPreKey::new(1);
+
+        let bundle_without_otpk = PreKeyBundle::new(&identity_key, &signed_pre_key, None);
+        let serialized_without_otpk = bundle_without_otpk
+            .serialize()
+            .expect("Failed to serialize");
+
+        let one_time_pre_key = OneTimePreKey::new(1);
+        let bundle_with_otpk =
+            PreKeyBundle::new(&identity_key, &signed_pre_key, Some(&one_time_pre_key));
+        let serialized_with_otpk = bundle_with_otpk.serialize().expect("Failed to serialize");
+
+        assert!(
+            serialized_with_otpk.len() > serialized_without_otpk.len(),
+            "Serialized bundle with OTPK should be larger"
+        );
+    }
+
+    #[test]
+    fn test_prekey_bundle_deserialization_errors() {
+        let mut invalid_proto = PreKeyBundleProto {
+            public_identity_key_dh: vec![0; 16], // Wrong length
+            public_identity_key_verifier: vec![0; 32],
+            signed_pre_key_id: 1,
+            public_signed_pre_key: vec![0; 32],
+            signature: vec![0; 64],
+            public_one_time_pre_key: None,
+        };
+
+        let mut buf = Vec::new();
+        invalid_proto.encode(&mut buf).expect("Failed to encode");
+
+        let result = PreKeyBundle::deserialize(&buf);
+        assert!(
+            result.is_err(),
+            "Should fail with invalid identity key length"
+        );
+
+        invalid_proto.public_identity_key_dh = vec![0; 32];
+        invalid_proto.public_identity_key_verifier = vec![0; 16]; // Wrong length
+
+        let mut buf = Vec::new();
+        invalid_proto.encode(&mut buf).expect("Failed to encode");
+
+        let result = PreKeyBundle::deserialize(&buf);
+        assert!(
+            result.is_err(),
+            "Should fail with invalid identity key verifier length"
+        );
+
+        invalid_proto.public_identity_key_verifier = vec![0; 32];
+        invalid_proto.public_signed_pre_key = vec![0; 16]; // Wrong length
+
+        let mut buf = Vec::new();
+        invalid_proto.encode(&mut buf).expect("Failed to encode");
+
+        let result = PreKeyBundle::deserialize(&buf);
+        assert!(
+            result.is_err(),
+            "Should fail with invalid signed pre-key length"
+        );
+
+        invalid_proto.public_signed_pre_key = vec![0; 32];
+        invalid_proto.signature = vec![0; 32]; // Wrong length
+
+        let mut buf = Vec::new();
+        invalid_proto.encode(&mut buf).expect("Failed to encode");
+
+        let result = PreKeyBundle::deserialize(&buf);
+        assert!(result.is_err(), "Should fail with invalid signature length");
+
+        invalid_proto.signature = vec![0; 64];
+        invalid_proto.public_one_time_pre_key = Some(vec![0; 16]); // Wrong length
+
+        let mut buf = Vec::new();
+        invalid_proto.encode(&mut buf).expect("Failed to encode");
+
+        let result = PreKeyBundle::deserialize(&buf);
+        assert!(
+            result.is_err(),
+            "Should fail with invalid one-time pre-key length"
+        );
+    }
+
+    #[test]
+    fn test_corrupted_data_deserialization() {
+        let identity_key = IdentityKey::new();
+        let signed_pre_key = SignedPreKey::new(1);
+
+        let bundle = PreKeyBundle::new(&identity_key, &signed_pre_key, None);
+        let mut serialized = bundle.serialize().expect("Failed to serialize");
+
+        // Corrupt the data
+        serialized.reverse();
+
+        // Try to deserialize
+        let result = PreKeyBundle::deserialize(&serialized);
+
+        if let Ok(deserialized) = result {
+            assert!(
+                deserialized.verify().is_err(),
+                "Corrupted data should fail verification"
+            );
+        } else {
+            assert!(
+                result.is_err(),
+                "Corrupted data should fail deserialization"
+            );
+        }
     }
 }

@@ -1,5 +1,5 @@
-use crate::{IdentityKey, OneTimePreKey, X25519PublicKey, X25519Secret};
-use ed25519_dalek::Verifier;
+use crate::{Error, IdentityKey, OneTimePreKey, X25519PublicKey, X25519Secret};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rand::TryRngCore;
 use rand::rngs::OsRng;
 
@@ -51,7 +51,7 @@ impl SignedPreKey {
     ///
     /// The signature proves that the signed pre-key belongs to the
     /// owner of the identity key, providing authentication.
-    pub fn signature(&self, identity_key: &IdentityKey) -> ed25519_dalek::Signature {
+    pub fn signature(&self, identity_key: &IdentityKey) -> Signature {
         let encoded = self.encode_for_signature();
         identity_key.sign(&encoded)
     }
@@ -121,12 +121,12 @@ impl From<[u8; 44]> for SignedPreKey {
 /// - Signed pre-key with signature for authenticated key agreement
 /// - Optional one-time pre-key for additional security
 pub struct PreKeyBundle {
-    public_identity_key_dh: X25519PublicKey,
-    public_identity_key_verifier: ed25519_dalek::VerifyingKey,
-    signed_pre_key_id: u32,
-    public_signed_pre_key: X25519PublicKey,
-    signature: ed25519_dalek::Signature,
-    public_one_time_pre_key: Option<X25519PublicKey>,
+    pub(crate) public_identity_key_dh: X25519PublicKey,
+    pub(crate) public_identity_key_verifier: VerifyingKey,
+    pub(crate) signed_pre_key_id: u32,
+    pub(crate) public_signed_pre_key: X25519PublicKey,
+    pub(crate) signature: Signature,
+    pub(crate) public_one_time_pre_key: Option<X25519PublicKey>,
 }
 
 impl PreKeyBundle {
@@ -158,11 +158,12 @@ impl PreKeyBundle {
     ///
     /// # Returns
     ///
-    /// Ok(()) if the signature is valid, or an Error otherwise.
-    pub fn verify(&self) -> Result<(), ed25519_dalek::ed25519::Error> {
+    /// Ok(()) if the signature is valid, or an Err otherwise.
+    pub fn verify(&self) -> Result<(), Error> {
         let encoded_key = self.public_signed_pre_key.to_bytes();
         self.public_identity_key_verifier
             .verify(&encoded_key, &self.signature)
+            .map_err(|err| Error::PreKey(err.to_string()))
     }
 
     /// Returns the public signed pre-key (SPK_pub) from this bundle.
@@ -181,13 +182,18 @@ impl PreKeyBundle {
     }
 
     /// Returns the public verification key for the identity.
-    pub fn public_identity_key_verifier(&self) -> ed25519_dalek::VerifyingKey {
+    pub fn public_identity_key_verifier(&self) -> VerifyingKey {
         self.public_identity_key_verifier
     }
 
     /// Returns the optional one-time pre-key (OPK_pub) from this bundle.
     pub fn public_one_time_pre_key(&self) -> Option<X25519PublicKey> {
         self.public_one_time_pre_key
+    }
+
+    /// Returns the optional one-time pre-key (OPK_pub) from this bundle.
+    pub fn signature(&self) -> Signature {
+        self.signature
     }
 }
 

@@ -217,15 +217,12 @@ mod tests {
 
     #[test]
     fn test_account_creation() {
-        // Create with default config
         let account = Account::new(None);
         let config = account.config();
 
-        // Verify default config values
         assert_eq!(config.max_skipped_messages, 100);
         assert!(config.min_one_time_pre_keys > 0);
 
-        // Create with custom config
         let custom_config = AccountConfig {
             max_skipped_messages: 50,
             signed_pre_key_rotation_interval: Duration::from_secs(24 * 60 * 60), // 1 day
@@ -251,16 +248,13 @@ mod tests {
     fn test_account_key_bundle_generation() {
         let mut account = Account::new(None);
 
-        // Get key bundle and verify it contains the expected components
         let (bundle, one_time_keys) = account.prekey_bundle();
 
-        // Verify bundle properties
         assert!(
             bundle.verify().is_ok(),
             "Key bundle should have valid signature"
         );
 
-        // Verify one-time keys
         assert!(
             !one_time_keys.is_empty(),
             "Should have generated one-time pre keys"
@@ -269,11 +263,9 @@ mod tests {
 
     #[test]
     fn test_account_session_management() {
-        // Create two accounts
         let mut alice_account = Account::new(None);
         let mut bob_account = Account::new(None);
 
-        // Get Bob's key bundle
         let (bob_bundle, _) = bob_account.prekey_bundle();
 
         // Alice initiates a session with Bob

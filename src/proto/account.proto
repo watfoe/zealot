@@ -1,6 +1,15 @@
 syntax = "proto3";
 package zealot;
 
+message PreKeyBundleProto {
+    bytes public_identity_key_dh = 1;
+    bytes public_identity_key_verifier = 2;
+    uint32 signed_pre_key_id = 3;
+    bytes public_signed_pre_key = 4;
+    bytes signature = 5;
+    optional bytes public_one_time_pre_key = 6;
+}
+
 message AccountProto {
     bytes identity_key = 1;
     bytes signed_pre_key = 2;

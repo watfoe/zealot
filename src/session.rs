@@ -1,5 +1,5 @@
-use std::time::SystemTime;
 use crate::{DoubleRatchet, Error, RatchetMessage, X25519PublicKey};
+use std::time::SystemTime;
 
 /// A secure messaging session between two parties.
 ///
