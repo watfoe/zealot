@@ -76,12 +76,12 @@ impl DoubleRatchet {
     /// using the shared secret from X3DH and Bob's signed pre-key.
     pub fn initialize_for_alice(
         mut shared_secret: [u8; 32],
-        receiver_public_key: &X25519PublicKey,
+        bob_public_key: &X25519PublicKey,
     ) -> Self {
         let dh_pair = X25519Secret::from(generate_random_seed().unwrap());
 
         // Perform initial DH and KDF
-        let dh_output = dh_pair.dh(receiver_public_key);
+        let dh_output = dh_pair.dh(bob_public_key);
         let (new_root_key, chain_key, next_sending_header_key) =
             Self::kdf_rk_he(&shared_secret, dh_output);
 
@@ -98,7 +98,7 @@ impl DoubleRatchet {
             state: RatchetState {
                 dh_pair,
                 root_key: new_root_key,
-                dh_remote_public: Some(*receiver_public_key),
+                remote_public_dh_key: Some(*bob_public_key),
                 sending_chain,
                 sending_header_key: Some(header_key_a),
                 next_sending_header_key,
@@ -129,7 +129,7 @@ impl DoubleRatchet {
                 receiving_header_key: Some(header_key_a),
                 next_sending_header_key: next_header_key_b,
                 next_receiving_header_key: Some(header_key_a),
-                dh_remote_public: None,
+                remote_public_dh_key: None,
                 sending_chain: Default::default(),
                 sending_header_key: None,
                 receiving_chain: Default::default(),
@@ -279,8 +279,8 @@ impl DoubleRatchet {
         })?;
 
         // Check if ratchet public key has changed
-        if self.state.dh_remote_public.is_none()
-            || header.public_key != self.state.dh_remote_public.unwrap()
+        if self.state.remote_public_dh_key.is_none()
+            || header.public_key != self.state.remote_public_dh_key.unwrap()
         {
             // Ratchet step - DH key has changed
             self.dh_ratchet(&header).map_err(|err| {
@@ -397,7 +397,7 @@ impl DoubleRatchet {
         self.state.previous_sending_chain_length = self.state.sending_chain.get_index();
 
         // Update remote public key
-        self.state.dh_remote_public = Some(header.public_key);
+        self.state.remote_public_dh_key = Some(header.public_key);
 
         // Reset message counters
         self.state.receiving_message_number = 0;
@@ -695,7 +695,9 @@ mod tests {
 
         // 3. Alice performs X3DH with Bob's bundle
         let x3dh = X3DH::new(b"Test-Signal-Protocol");
-        let alice_x3dh_result = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
+        let alice_x3dh_result = x3dh
+            .initiate_for_alice(&alice_identity, &bob_bundle)
+            .unwrap();
         let alice_public_key = alice_x3dh_result.public_key();
         // 4. Alice initializes her Double Ratchet with the shared secret
         let mut alice_ratchet = DoubleRatchet::initialize_for_alice(
@@ -704,7 +706,7 @@ mod tests {
         );
         // 5. Bob processes Alice's initiation
         let bob_shared_secret = x3dh
-            .process_initiation(
+            .initiate_for_bob(
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),

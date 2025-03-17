@@ -30,7 +30,7 @@ message SessionProto {
     RatchetProto ratchet = 2;
     uint64 created_at = 3;
     uint64 last_used_at = 4;
-    bool is_initiator = 5;
+    optional bytes public_initiator_ephemeral_key = 5;
 }
 
 message RatchetProto {
@@ -47,7 +47,7 @@ message SkippedMessageKeyProto {
 }
 
 message RatchetStateProto {
-    bytes dh_remote_public = 1;
+    bytes remote_public_dh_key = 1;
     bytes root_key = 2;
     ChainProto sending_chain = 3;
     ChainProto receiving_chain = 4;

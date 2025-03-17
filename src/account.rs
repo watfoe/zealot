@@ -7,16 +7,17 @@ use base64::Engine;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 /// An `Account` represents a user in the Signal Protocol ecosystem, managing
 /// identity keys, pre-keys, and established sessions. It provides methods for
 /// creating and managing secure communication sessions with other users.
 pub struct Account {
-    pub(crate) ik: IdentityKey,
-    pub(crate) spk: SignedPreKey,
-    pub(crate) spk_last_rotation: std::time::SystemTime,
+    pub ik: IdentityKey,
+    pub spk: SignedPreKey,
+    pub spk_last_rotation: SystemTime,
     pub(crate) otpk_store: OneTimePreKeyStore,
-    pub(crate) sessions: HashMap<String, Session>, // session_id -> Session
+    pub sessions: HashMap<String, Session>, // session_id -> Session
     pub(crate) config: AccountConfig,
 }
 
@@ -29,7 +30,7 @@ impl Account {
 
         let ik = IdentityKey::new();
         let spk = SignedPreKey::new(1);
-        let now = std::time::SystemTime::now();
+        let now = SystemTime::now();
 
         let mut otpk_store = OneTimePreKeyStore::new(config.max_one_time_pre_keys);
         otpk_store.generate_keys(config.max_one_time_pre_keys);
@@ -54,9 +55,21 @@ impl Account {
         (PreKeyBundle::new(&self.ik, &self.spk, None), otpks)
     }
 
+    pub fn signed_prekey(&self) -> &SignedPreKey {
+        &self.spk
+    }
+
+    pub fn signed_prekey_last_rotation(&self) -> SystemTime {
+        self.spk_last_rotation
+    }
+
+    pub fn identity_key(&self) -> &IdentityKey {
+        &self.ik
+    }
+
     /// Returns the configuration for this account.
-    pub fn config(&self) -> AccountConfig {
-        self.config.clone()
+    pub fn config(&self) -> &AccountConfig {
+        &self.config
     }
 
     /// Initiates a new session with another user (Bob).
@@ -65,22 +78,23 @@ impl Account {
     /// using the pre-key bundle retrieved from the other user (Bob).
     pub fn create_outbound_session(
         &mut self,
-        their_bundle: &PreKeyBundle,
+        bob_prekey_bundle: &PreKeyBundle,
     ) -> Result<String, Error> {
-        let x3dh = X3DH::new(&self.config.protocol_info);
-        let x3dh_result = x3dh.initiate(&self.ik, their_bundle)?;
+        let x3dh_result = X3DH::new(&self.config.protocol_info)
+            .initiate_for_alice(&self.ik, bob_prekey_bundle)?;
 
         let session_id = self.derive_session_id(
-            &their_bundle.public_identity_key(),
+            &bob_prekey_bundle.public_identity_key(),
             &x3dh_result.public_key(),
         );
 
+        let x3dh_pub_key = x3dh_result.public_key();
         let ratchet = DoubleRatchet::initialize_for_alice(
             x3dh_result.shared_secret(),
-            &their_bundle.public_signed_pre_key(),
+            &bob_prekey_bundle.public_signed_pre_key(),
         );
 
-        let session = Session::new(session_id.clone(), ratchet, true);
+        let session = Session::new(session_id.clone(), ratchet, Some(x3dh_pub_key));
 
         self.sessions.insert(session_id.clone(), session);
 
@@ -94,8 +108,8 @@ impl Account {
     /// initiator (Alice).
     pub fn create_inbound_session(
         &mut self,
-        their_ik: &X25519PublicKey,
-        their_ephemeral_key: &X25519PublicKey,
+        alice_public_ik: &X25519PublicKey,
+        alice_public_ephemeral_key: &X25519PublicKey,
         spk_id: u32,
         one_time_pre_key_id: Option<u32>,
     ) -> Result<String, Error> {
@@ -104,7 +118,6 @@ impl Account {
         }
 
         let one_time_pre_key = if let Some(id) = one_time_pre_key_id {
-            // Remove the one-time pre-key from the store once used
             Some(
                 self.otpk_store
                     .take(id)
@@ -114,31 +127,28 @@ impl Account {
             None
         };
 
-        // Process X3DH
-        let x3dh = X3DH::new(&self.config.protocol_info);
-        let shared_secret = x3dh.process_initiation(
+        let shared_secret = X3DH::new(&self.config.protocol_info).initiate_for_bob(
             &self.ik,
             &self.spk,
             one_time_pre_key,
-            their_ik,
-            their_ephemeral_key,
+            alice_public_ik,
+            alice_public_ephemeral_key,
         )?;
 
-        // Initialize Double Ratchet
         let ratchet = DoubleRatchet::initialize_for_bob(shared_secret, self.spk.key_pair());
-
-        // Create a unique session ID
-        let session_id = self.derive_session_id(their_ik, their_ephemeral_key);
-
-        // Create and store the session
-        let session = Session::new(session_id.clone(), ratchet, false);
+        let session_id = self.derive_session_id(alice_public_ik, alice_public_ephemeral_key);
+        let session = Session::new(session_id.clone(), ratchet, None);
 
         self.sessions.insert(session_id.clone(), session);
 
-        // Check if we need more one-time pre-keys
         self.maybe_replenish_otpk_store();
 
         Ok(session_id)
+    }
+
+    /// Returns a reference to all sessions in this account
+    pub fn sessions(&self) -> &HashMap<String, Session> {
+        &self.sessions
     }
 
     /// Returns a reference to a session by its ID.
@@ -153,7 +163,7 @@ impl Account {
 
     // Periodically rotate the signed pre-key
     fn maybe_rotate_spk(&mut self) {
-        let now = std::time::SystemTime::now();
+        let now = SystemTime::now();
         if now
             .duration_since(self.spk_last_rotation)
             .unwrap_or_default()
@@ -268,13 +278,8 @@ mod tests {
 
         // Alice initiates a session with Bob
         let alice_session_id = alice_account.create_outbound_session(&bob_bundle).unwrap();
-
-        // Verify session was created and stored
-        assert!(alice_account.session(&alice_session_id).is_some());
-
-        // Send a message from Alice to Bob
-        let alice_session = alice_account.session_mut(&alice_session_id).unwrap();
         let message = "Hello Bob!";
+        let alice_session = alice_account.session_mut(&alice_session_id).unwrap();
         let encrypted = alice_session.encrypt(message.as_bytes(), b"AD").unwrap();
     }
 

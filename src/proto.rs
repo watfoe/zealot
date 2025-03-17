@@ -12,11 +12,11 @@ include!(concat!(env!("OUT_DIR"), "/zealot.rs"));
 
 impl Account {
     /// Serialize the account to Protocol Buffers format
-    pub fn serialize(&self) -> Result<Vec<u8>, Error> {
-        let ik_bytes = self.ik.to_bytes();
-        let spk_bytes = self.spk.to_bytes();
+    pub fn serialize(self) -> Result<Vec<u8>, Error> {
+        let ik_bytes = self.identity_key().to_bytes();
+        let spk_bytes = self.signed_prekey().to_bytes();
         let spk_rotation_secs = self
-            .spk_last_rotation
+            .signed_prekey_last_rotation()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
@@ -33,18 +33,18 @@ impl Account {
         };
 
         let config = AccountConfigProto {
-            max_skipped_messages: self.config.max_skipped_messages,
+            max_skipped_messages: self.config().max_skipped_messages,
             signed_pre_key_rotation_interval_secs: self
-                .config
+                .config()
                 .signed_pre_key_rotation_interval
                 .as_secs(),
-            min_one_time_pre_keys: self.config.min_one_time_pre_keys as u32,
-            max_one_time_pre_keys: self.config.max_one_time_pre_keys as u32,
-            protocol_info: self.config.protocol_info.clone(),
+            min_one_time_pre_keys: self.config().min_one_time_pre_keys as u32,
+            max_one_time_pre_keys: self.config().max_one_time_pre_keys as u32,
+            protocol_info: self.config().protocol_info.clone(),
         };
 
         let mut sessions = HashMap::new();
-        for (id, session) in &self.sessions {
+        for (id, session) in self.sessions {
             sessions.insert(id.clone(), session.serialize()?);
         }
 
@@ -145,7 +145,7 @@ impl Account {
 }
 
 impl Session {
-    pub fn serialize(&self) -> Result<SessionProto, Error> {
+    pub fn serialize(self) -> Result<SessionProto, Error> {
         let created_at_secs = self
             .created_at
             .duration_since(UNIX_EPOCH)
@@ -163,7 +163,7 @@ impl Session {
             ratchet: Some(serialize_ratchet(&self.ratchet)?),
             created_at: created_at_secs,
             last_used_at: last_used_at_secs,
-            is_initiator: self.is_initiator,
+            public_initiator_ephemeral_key: self.public_initiator_ephemeral_key.map(|key| key.to_bytes().to_vec()),
         })
     }
 
@@ -182,7 +182,11 @@ impl Session {
             ratchet,
             created_at,
             last_used_at,
-            is_initiator: proto.is_initiator,
+            public_initiator_ephemeral_key: proto.public_initiator_ephemeral_key.map(|value| {
+                let mut bytes = [0u8; 32];
+                bytes.copy_from_slice(&value);
+                X25519PublicKey::from(bytes)
+            }),
         })
     }
 }
@@ -191,7 +195,7 @@ fn serialize_ratchet(ratchet: &DoubleRatchet) -> Result<RatchetProto, Error> {
     let dh_pair_bytes = ratchet.state.dh_pair.to_bytes().to_vec();
 
     let state_proto = RatchetStateProto {
-        dh_remote_public: match &ratchet.state.dh_remote_public {
+        remote_public_dh_key: match &ratchet.state.remote_public_dh_key {
             Some(pk) => pk.as_bytes().to_vec(),
             None => Vec::new(),
         },
@@ -252,12 +256,12 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
         .state
         .ok_or_else(|| Error::Serde("Missing ratchet state".to_string()))?;
 
-    let dh_remote_public = if !state_proto.dh_remote_public.is_empty() {
-        if state_proto.dh_remote_public.len() != 32 {
+    let remote_public_dh_key = if !state_proto.remote_public_dh_key.is_empty() {
+        if state_proto.remote_public_dh_key.len() != 32 {
             return Err(Error::Serde("Invalid remote public key length".to_string()));
         }
         let mut pk_bytes = [0u8; 32];
-        pk_bytes.copy_from_slice(&state_proto.dh_remote_public);
+        pk_bytes.copy_from_slice(&state_proto.remote_public_dh_key);
         Some(X25519PublicKey::from(pk_bytes))
     } else {
         None
@@ -339,7 +343,7 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
 
     let state = RatchetState {
         dh_pair,
-        dh_remote_public,
+        remote_public_dh_key,
         root_key,
         sending_chain,
         receiving_chain,
@@ -394,7 +398,9 @@ mod tests {
 
         // Alice performs X3DH with Bob's bundle
         let x3dh = X3DH::new(b"Test-Session-Protocol");
-        let alice_x3dh_result = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
+        let alice_x3dh_result = x3dh
+            .initiate_for_alice(&alice_identity, &bob_bundle)
+            .unwrap();
         let alice_ephemeral_public = alice_x3dh_result.public_key();
 
         // Alice initializes her Double Ratchet
@@ -405,11 +411,15 @@ mod tests {
 
         // Create a session ID for Alice
         let alice_session_id = format!("alice-to-bob-{}", rand::random::<u32>());
-        let alice_session = Session::new(alice_session_id, alice_ratchet, true);
+        let alice_session = Session::new(
+            alice_session_id,
+            alice_ratchet,
+            Some(alice_ephemeral_public),
+        );
 
         // Bob processes Alice's initiation
         let bob_shared_secret = x3dh
-            .process_initiation(
+            .initiate_for_bob(
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
@@ -419,14 +429,12 @@ mod tests {
             .unwrap();
 
         // Bob initializes his Double Ratchet
-        let bob_ratchet = DoubleRatchet::initialize_for_bob(
-            bob_shared_secret,
-            bob_signed_pre_key.key_pair(),
-        );
+        let bob_ratchet =
+            DoubleRatchet::initialize_for_bob(bob_shared_secret, bob_signed_pre_key.key_pair());
 
         // Create a session ID for Bob
         let bob_session_id = format!("bob-to-alice-{}", rand::random::<u32>());
-        let bob_session = Session::new(bob_session_id, bob_ratchet, false);
+        let bob_session = Session::new(bob_session_id, bob_ratchet, None);
 
         (alice_session, bob_session)
     }
@@ -447,6 +455,13 @@ mod tests {
         let bob_signed_pre_key = SignedPreKey::new(1);
         let bob_bundle = PreKeyBundle::new(&bob_identity, &bob_signed_pre_key, None);
 
+        let ik_pub = account.identity_key().public_dh_key();
+        let spk_pub = account.signed_prekey().public_key();
+        let max_skipped_msgs = account.config().max_skipped_messages;
+        let spk_rotation_interval = account.config().signed_pre_key_rotation_interval;
+        let protocol_info = account.config().protocol_info.clone();
+        let otpk_count = account.otpk_store.count();
+
         let session_id = account.create_outbound_session(&bob_bundle).unwrap();
 
         let serialized = account.serialize().unwrap();
@@ -454,35 +469,35 @@ mod tests {
         let deserialized_account = Account::deserialize(&serialized).unwrap();
 
         assert_eq!(
-            account.ik.public_dh_key().as_bytes(),
-            deserialized_account.ik.public_dh_key().as_bytes(),
+            ik_pub.as_bytes(),
+            deserialized_account.identity_key().public_dh_key().as_bytes(),
             "Identity keys should match"
         );
 
         assert_eq!(
-            account.spk.public_key().as_bytes(),
-            deserialized_account.spk.public_key().as_bytes(),
+            spk_pub.as_bytes(),
+            deserialized_account.signed_prekey().public_key().as_bytes(),
             "Signed pre-keys should match"
         );
 
         assert_eq!(
-            account.config.max_skipped_messages, deserialized_account.config.max_skipped_messages,
+            max_skipped_msgs, deserialized_account.config().max_skipped_messages,
             "Config max_skipped_messages should match"
         );
 
         assert_eq!(
-            account.config.signed_pre_key_rotation_interval,
-            deserialized_account.config.signed_pre_key_rotation_interval,
+            spk_rotation_interval,
+            deserialized_account.config().signed_pre_key_rotation_interval,
             "Config rotation interval should match"
         );
 
         assert_eq!(
-            account.config.protocol_info, deserialized_account.config.protocol_info,
+            protocol_info, deserialized_account.config().protocol_info,
             "Protocol info should match"
         );
 
         assert_eq!(
-            account.otpk_store.count(),
+            otpk_count,
             deserialized_account.otpk_store.count(),
             "One-time pre-key count should match"
         );

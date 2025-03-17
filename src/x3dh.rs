@@ -93,7 +93,7 @@ impl X3DH {
     /// 2. Generates an ephemeral key pair
     /// 3. Performs the necessary DH computations
     /// 4. Derives the shared secret
-    pub fn initiate(
+    pub fn initiate_for_alice(
         &self,
         a_identity: &IdentityKey,
         b_bundle: &PreKeyBundle,
@@ -127,7 +127,7 @@ impl X3DH {
     /// This implements Bob's side of the X3DH protocol:
     /// 1. Performs the same DH computations as Alice did
     /// 2. Derives the same shared secret
-    pub fn process_initiation(
+    pub fn initiate_for_bob(
         &self,
         b_identity: &IdentityKey,
         b_signed_pre_key: &SignedPreKey,
@@ -217,11 +217,13 @@ mod tests {
 
         // Alice initiates the key agreement
         let x3dh = X3DH::new(b"Test-Protocol-Info");
-        let alice_result = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
+        let alice_result = x3dh
+            .initiate_for_alice(&alice_identity, &bob_bundle)
+            .unwrap();
 
         // Bob processes Alice's initiation
         let bob_secret = x3dh
-            .process_initiation(
+            .initiate_for_bob(
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
@@ -243,10 +245,12 @@ mod tests {
         let bob_bundle = PreKeyBundle::new(&bob_identity, &bob_signed_pre_key, None);
 
         let x3dh = X3DH::new(b"Test-Protocol-Info");
-        let alice_result = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
+        let alice_result = x3dh
+            .initiate_for_alice(&alice_identity, &bob_bundle)
+            .unwrap();
 
         let bob_secret = x3dh
-            .process_initiation(
+            .initiate_for_bob(
                 &bob_identity,
                 &bob_signed_pre_key,
                 None,
@@ -272,7 +276,7 @@ mod tests {
 
         // For now, we'll just test that the valid bundle passes verification
         let x3dh = X3DH::new(b"Test-Protocol-Info");
-        let result = x3dh.initiate(&alice_identity, &bob_bundle);
+        let result = x3dh.initiate_for_alice(&alice_identity, &bob_bundle);
         assert!(result.is_ok());
     }
 
@@ -286,10 +290,14 @@ mod tests {
         let bob_bundle = PreKeyBundle::new(&bob_identity, &bob_signed_pre_key, None);
 
         let x3dh1 = X3DH::new(b"App-A");
-        let alice_result1 = x3dh1.initiate(&alice_identity, &bob_bundle).unwrap();
+        let alice_result1 = x3dh1
+            .initiate_for_alice(&alice_identity, &bob_bundle)
+            .unwrap();
 
         let x3dh2 = X3DH::new(b"App-B");
-        let alice_result2 = x3dh2.initiate(&alice_identity, &bob_bundle).unwrap();
+        let alice_result2 = x3dh2
+            .initiate_for_alice(&alice_identity, &bob_bundle)
+            .unwrap();
 
         assert_ne!(alice_result1.shared_secret, alice_result2.shared_secret);
     }
@@ -315,7 +323,9 @@ mod tests {
         let bob_bundle = PreKeyBundle::new(&bob_identity, &bob_signed_pre_key, None);
 
         let x3dh = X3DH::new(b"Test-Protocol-Info");
-        let alice_result = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
+        let alice_result = x3dh
+            .initiate_for_alice(&alice_identity, &bob_bundle)
+            .unwrap();
 
         assert_eq!(alice_result.shared_secret.len(), 32);
     }

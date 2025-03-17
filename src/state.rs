@@ -5,7 +5,7 @@ use crate::{X25519PublicKey, X25519Secret};
 pub(crate) struct RatchetState {
     pub(crate) dh_pair: X25519Secret,
 
-    pub(crate) dh_remote_public: Option<X25519PublicKey>,
+    pub(crate) remote_public_dh_key: Option<X25519PublicKey>,
 
     pub(crate) root_key: [u8; 32],
     pub(crate) sending_chain: Chain,

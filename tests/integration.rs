@@ -29,7 +29,9 @@ mod integration_tests {
         // Step 5: Alice performs X3DH with Bob's bundle
         println!("Step 5: Alice performs X3DH...");
         let x3dh = X3DH::new(b"Zealot-Integration-Test");
-        let alice_x3dh_result = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
+        let alice_x3dh_result = x3dh
+            .initiate_for_alice(&alice_identity, &bob_bundle)
+            .unwrap();
         let alice_ephemeral_public = alice_x3dh_result.public_key();
 
         // Step 6: Alice initializes her Double Ratchet
@@ -55,7 +57,7 @@ mod integration_tests {
         // Step 8: Bob receives Alice's first message and processes the X3DH
         println!("Step 8: Bob processes X3DH from Alice's keys...");
         let bob_shared_secret = x3dh
-            .process_initiation(
+            .initiate_for_bob(
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
@@ -221,11 +223,15 @@ mod integration_tests {
 
         // Alice performs X3DH with Bob
         let x3dh = X3DH::new(b"Zealot-Integration-Test");
-        let alice_bob_x3dh = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
+        let alice_bob_x3dh = x3dh
+            .initiate_for_alice(&alice_identity, &bob_bundle)
+            .unwrap();
         let alice_bob_ephemeral = alice_bob_x3dh.public_key();
 
         // Alice performs X3DH with Charlie
-        let alice_charlie_x3dh = x3dh.initiate(&alice_identity, &charlie_bundle).unwrap();
+        let alice_charlie_x3dh = x3dh
+            .initiate_for_alice(&alice_identity, &charlie_bundle)
+            .unwrap();
         let alice_charlie_ephemeral = alice_charlie_x3dh.public_key();
 
         // Alice initializes Double Ratchet sessions
@@ -241,7 +247,7 @@ mod integration_tests {
 
         // Bob and Charlie process X3DH
         let bob_shared_secret = x3dh
-            .process_initiation(
+            .initiate_for_bob(
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
@@ -251,7 +257,7 @@ mod integration_tests {
             .unwrap();
 
         let charlie_shared_secret = x3dh
-            .process_initiation(
+            .initiate_for_bob(
                 &charlie_identity,
                 &charlie_signed_pre_key,
                 Some(charlie_one_time_pre_key),
@@ -338,7 +344,9 @@ mod integration_tests {
 
         // Alice performs X3DH with Bob
         let x3dh = X3DH::new(b"Zealot-Integration-Test");
-        let alice_bob_x3dh = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
+        let alice_bob_x3dh = x3dh
+            .initiate_for_alice(&alice_identity, &bob_bundle)
+            .unwrap();
         let alice_bob_ephemeral = alice_bob_x3dh.public_key();
 
         // Alice initializes Double Ratchet session
@@ -349,7 +357,7 @@ mod integration_tests {
 
         // Bob processes X3DH
         let bob_shared_secret = x3dh
-            .process_initiation(
+            .initiate_for_bob(
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
@@ -400,7 +408,9 @@ mod integration_tests {
         );
 
         // Alice initiates a new X3DH with Bob's new bundle
-        let alice_new_x3dh = x3dh.initiate(&alice_identity, &bob_new_bundle).unwrap();
+        let alice_new_x3dh = x3dh
+            .initiate_for_alice(&alice_identity, &bob_new_bundle)
+            .unwrap();
         let alice_new_ephemeral = alice_new_x3dh.public_key();
 
         // Alice creates a new ratchet session
@@ -411,7 +421,7 @@ mod integration_tests {
 
         // Bob processes the new X3DH
         let bob_new_shared_secret = x3dh
-            .process_initiation(
+            .initiate_for_bob(
                 &bob_identity,
                 &bob_new_signed_pre_key,
                 Some(bob_new_one_time_pre_key),

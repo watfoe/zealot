@@ -1,4 +1,5 @@
-use crate::{DoubleRatchet, Error, RatchetMessage};
+use std::time::SystemTime;
+use crate::{DoubleRatchet, Error, RatchetMessage, X25519PublicKey};
 
 /// A secure messaging session between two parties.
 ///
@@ -11,21 +12,25 @@ use crate::{DoubleRatchet, Error, RatchetMessage};
 pub struct Session {
     pub(crate) session_id: String,
     pub(crate) ratchet: DoubleRatchet,
-    pub(crate) created_at: std::time::SystemTime,
-    pub(crate) last_used_at: std::time::SystemTime,
-    pub(crate) is_initiator: bool,
+    pub(crate) created_at: SystemTime,
+    pub(crate) last_used_at: SystemTime,
+    pub(crate) public_initiator_ephemeral_key: Option<X25519PublicKey>,
 }
 
 impl Session {
     /// Creates a new session with the given parameters.
-    pub fn new(session_id: String, ratchet: DoubleRatchet, is_initiator: bool) -> Self {
-        let now = std::time::SystemTime::now();
+    pub fn new(
+        session_id: String,
+        ratchet: DoubleRatchet,
+        public_initiator_ephemeral_key: Option<X25519PublicKey>,
+    ) -> Self {
+        let now = SystemTime::now();
         Self {
             session_id,
             ratchet,
             created_at: now,
             last_used_at: now,
-            is_initiator,
+            public_initiator_ephemeral_key,
         }
     }
 
@@ -34,13 +39,29 @@ impl Session {
         self.session_id.clone()
     }
 
+    pub fn is_initiator(&self) -> bool {
+        self.public_initiator_ephemeral_key.is_some()
+    }
+
+    pub fn public_initiator_ephemeral_key(&self) -> Option<X25519PublicKey> {
+        self.public_initiator_ephemeral_key
+    }
+
+    pub fn created_at(&self) -> SystemTime {
+        self.created_at
+    }
+
+    pub fn last_used_at(&self) -> SystemTime {
+        self.last_used_at
+    }
+
     /// Encrypts a message using this session.
     pub fn encrypt(
         &mut self,
         plaintext: &[u8],
         associated_data: &[u8],
     ) -> Result<RatchetMessage, Error> {
-        self.last_used_at = std::time::SystemTime::now();
+        self.last_used_at = SystemTime::now();
         self.ratchet.encrypt(plaintext, associated_data)
     }
 
@@ -50,7 +71,7 @@ impl Session {
         message: &RatchetMessage,
         associated_data: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        self.last_used_at = std::time::SystemTime::now();
+        self.last_used_at = SystemTime::now();
         self.ratchet.decrypt(message, associated_data)
     }
 }
@@ -78,8 +99,12 @@ mod tests {
 
         // Alice performs X3DH with Bob's bundle
         let x3dh = X3DH::new(b"Test-Session-Protocol");
-        let alice_x3dh_result = x3dh.initiate(&alice_identity, &bob_bundle).unwrap();
+        let alice_x3dh_result = x3dh
+            .initiate_for_alice(&alice_identity, &bob_bundle)
+            .unwrap();
         let alice_ephemeral_public = alice_x3dh_result.public_key();
+
+        let alice_x3dh_pub_key = alice_x3dh_result.public_key();
 
         // Alice initializes her Double Ratchet
         let alice_ratchet = DoubleRatchet::initialize_for_alice(
@@ -89,11 +114,11 @@ mod tests {
 
         // Create a session ID for Alice
         let alice_session_id = format!("alice-to-bob-{}", rand::random::<u32>());
-        let alice_session = Session::new(alice_session_id, alice_ratchet, true);
+        let alice_session = Session::new(alice_session_id, alice_ratchet, Some(alice_x3dh_pub_key));
 
         // Bob processes Alice's initiation
         let bob_shared_secret = x3dh
-            .process_initiation(
+            .initiate_for_bob(
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
@@ -108,7 +133,7 @@ mod tests {
 
         // Create a session ID for Bob
         let bob_session_id = format!("bob-to-alice-{}", rand::random::<u32>());
-        let bob_session = Session::new(bob_session_id, bob_ratchet, false);
+        let bob_session = Session::new(bob_session_id, bob_ratchet, None);
 
         (alice_session, bob_session)
     }
