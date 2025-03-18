@@ -98,7 +98,7 @@ impl PreKeyBundle {
 
 impl Account {
     /// Serialize the account to Protocol Buffers format
-    pub fn serialize(self) -> Result<Vec<u8>, Error> {
+    pub fn serialize(&self) -> Result<Vec<u8>, Error> {
         let ik_bytes = self.identity_key().to_bytes();
         let spk_bytes = self.signed_prekey().to_bytes();
         let spk_rotation_secs = self
@@ -130,7 +130,7 @@ impl Account {
         };
 
         let mut sessions = HashMap::new();
-        for (id, session) in self.sessions {
+        for (id, session) in &self.sessions {
             sessions.insert(id.clone(), session.serialize()?);
         }
 
@@ -231,7 +231,7 @@ impl Account {
 }
 
 impl Session {
-    pub fn serialize(self) -> Result<SessionProto, Error> {
+    pub fn serialize(&self) -> Result<SessionProto, Error> {
         let created_at_secs = self
             .created_at
             .duration_since(UNIX_EPOCH)
