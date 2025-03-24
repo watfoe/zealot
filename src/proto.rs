@@ -468,8 +468,8 @@ mod tests {
         Account, AccountConfig, DoubleRatchet, IdentityKey, OneTimePreKey, PreKeyBundle, Session,
         SignedPreKey, X3DH,
     };
-    use std::time::Duration;
     use prost::Message;
+    use std::time::Duration;
 
     include!(concat!(env!("OUT_DIR"), "/zealot.rs"));
 

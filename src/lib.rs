@@ -239,5 +239,3 @@ pub use proto::*;
 
 pub(crate) mod chain;
 pub(crate) mod state;
-
-pub use ed25519_dalek::{Signature, VerifyingKey};

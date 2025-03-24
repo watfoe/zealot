@@ -1,4 +1,5 @@
 use crate::{Error, IdentityKey, OneTimePreKey, X25519PublicKey, X25519Secret};
+use ed25519_dalek::ed25519::SignatureBytes;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rand::TryRngCore;
 use rand::rngs::OsRng;
@@ -121,12 +122,12 @@ impl From<[u8; 44]> for SignedPreKey {
 /// - Signed pre-key with signature for authenticated key agreement
 /// - Optional one-time pre-key for additional security
 pub struct PreKeyBundle {
-    pub public_identity_key_dh: X25519PublicKey,
-    pub public_identity_key_verifier: VerifyingKey,
-    pub signed_pre_key_id: u32,
-    pub public_signed_pre_key: X25519PublicKey,
-    pub signature: Signature,
-    pub public_one_time_pre_key: Option<X25519PublicKey>,
+    pub(crate) public_identity_key_dh: X25519PublicKey,
+    pub(crate) public_identity_key_verifier: VerifyingKey,
+    pub(crate) public_signed_pre_key: X25519PublicKey,
+    pub(crate) signature: Signature,
+    pub(crate) signed_pre_key_id: u32,
+    pub(crate) public_one_time_pre_key: Option<X25519PublicKey>,
 }
 
 impl PreKeyBundle {
@@ -194,6 +195,26 @@ impl PreKeyBundle {
     /// Returns the optional one-time pre-key (OPK_pub) from this bundle.
     pub fn signature(&self) -> Signature {
         self.signature
+    }
+
+    pub fn try_from(
+        public_identity_key_dh: [u8; 32],
+        public_identity_key_verifier: [u8; 32],
+        public_signed_pre_key: [u8; 32],
+        signature: [u8; 64],
+        signed_pre_key_id: u32,
+        public_one_time_pre_key: Option<[u8; 32]>,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            public_identity_key_dh: X25519PublicKey::from(public_identity_key_dh),
+            public_identity_key_verifier: VerifyingKey::from_bytes(&public_identity_key_verifier)
+                .map_err(|err| Error::Serde(err.to_string()))?,
+            public_signed_pre_key: X25519PublicKey::from(public_signed_pre_key),
+            signature: Signature::from_bytes(&SignatureBytes::from(signature)),
+            signed_pre_key_id,
+            public_one_time_pre_key: public_one_time_pre_key
+                .map(|otpk| X25519PublicKey::from(otpk)),
+        })
     }
 }
 
