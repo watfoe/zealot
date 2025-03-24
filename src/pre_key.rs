@@ -121,12 +121,12 @@ impl From<[u8; 44]> for SignedPreKey {
 /// - Signed pre-key with signature for authenticated key agreement
 /// - Optional one-time pre-key for additional security
 pub struct PreKeyBundle {
-    pub(crate) public_identity_key_dh: X25519PublicKey,
-    pub(crate) public_identity_key_verifier: VerifyingKey,
-    pub(crate) signed_pre_key_id: u32,
-    pub(crate) public_signed_pre_key: X25519PublicKey,
-    pub(crate) signature: Signature,
-    pub(crate) public_one_time_pre_key: Option<X25519PublicKey>,
+    pub public_identity_key_dh: X25519PublicKey,
+    pub public_identity_key_verifier: VerifyingKey,
+    pub signed_pre_key_id: u32,
+    pub public_signed_pre_key: X25519PublicKey,
+    pub signature: Signature,
+    pub public_one_time_pre_key: Option<X25519PublicKey>,
 }
 
 impl PreKeyBundle {
