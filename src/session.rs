@@ -53,6 +53,14 @@ impl Session {
         self.x3dh_ephemeral_key_public
     }
 
+    pub fn x3dh_spk_id(&self) -> Option<u32> {
+        self.x3dh_spk_id
+    }
+
+    pub fn x3dh_otpk_id(&self) -> Option<u32> {
+        self.x3dh_otpk_id
+    }
+
     pub fn created_at(&self) -> SystemTime {
         self.created_at
     }
