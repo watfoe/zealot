@@ -63,13 +63,13 @@ impl IdentityKey {
         verifying_key.verify(message, signature)
     }
 
-    /// Returns the public Ed25519 verification key corresponding to this identity.
-    pub fn public_signing_key(&self) -> ed25519_dalek::VerifyingKey {
+    /// Returns the public Ed25519 signing key corresponding to this identity.
+    pub fn signing_key_public(&self) -> ed25519_dalek::VerifyingKey {
         self.signing_key.verifying_key()
     }
 
     /// Returns the public X25519 key for Diffie-Hellman operations.
-    pub fn public_dh_key(&self) -> X25519PublicKey {
+    pub fn dh_key_public(&self) -> X25519PublicKey {
         self.dh_key.public_key()
     }
 
@@ -151,13 +151,13 @@ mod tests {
         let bob_identity = IdentityKey::new();
 
         // Get Bob's public DH key
-        let bob_public = bob_identity.public_dh_key();
+        let bob_public = bob_identity.dh_key_public();
 
         // Alice computes the shared secret
         let alice_shared = alice_identity.dh(&bob_public);
 
         // Get Alice's public DH key
-        let alice_public = alice_identity.public_dh_key();
+        let alice_public = alice_identity.dh_key_public();
 
         // Bob computes the shared secret
         let bob_shared = bob_identity.dh(&alice_public);

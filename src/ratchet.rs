@@ -49,12 +49,6 @@ pub struct DoubleRatchet {
     pub(crate) max_skip: u32,
 }
 
-impl Default for DoubleRatchet {
-    fn default() -> Self {
-        todo!()
-    }
-}
-
 impl Drop for DoubleRatchet {
     fn drop(&mut self) {
         for (_, key) in self.skipped_message_keys.drain() {
@@ -98,7 +92,7 @@ impl DoubleRatchet {
             state: RatchetState {
                 dh_pair,
                 root_key: new_root_key,
-                remote_public_dh_key: Some(*bob_public_key),
+                remote_dh_key_public: Some(*bob_public_key),
                 sending_chain,
                 sending_header_key: Some(header_key_a),
                 next_sending_header_key,
@@ -129,7 +123,7 @@ impl DoubleRatchet {
                 receiving_header_key: Some(header_key_a),
                 next_sending_header_key: next_header_key_b,
                 next_receiving_header_key: Some(header_key_a),
-                remote_public_dh_key: None,
+                remote_dh_key_public: None,
                 sending_chain: Default::default(),
                 sending_header_key: None,
                 receiving_chain: Default::default(),
@@ -195,11 +189,7 @@ impl DoubleRatchet {
     /// 2. Encrypts the message header with the header key
     /// 3. Encrypts the message with the message key
     /// 4. Increments the sending chain message counter
-    pub fn encrypt(
-        &mut self,
-        plaintext: &[u8],
-        associated_data: &[u8],
-    ) -> Result<RatchetMessage, Error> {
+    pub fn encrypt(&mut self, plaintext: &[u8], ad: &[u8]) -> Result<RatchetMessage, Error> {
         let header = MessageHeader {
             public_key: self.public_key(),
             previous_chain_length: self.state.previous_sending_chain_length,
@@ -209,7 +199,7 @@ impl DoubleRatchet {
 
         let message_key = self.state.sending_chain.next();
         let ciphertext = with_ad_buffer(|buffer| {
-            buffer.extend_from_slice(associated_data);
+            buffer.extend_from_slice(ad);
             buffer.extend_from_slice(&encrypted_header);
             Self::encrypt_message(&message_key, plaintext, buffer)
         })?;
@@ -260,13 +250,9 @@ impl DoubleRatchet {
     /// 3. Performs a DH ratchet step if needed
     /// 4. Generates any skipped message keys
     /// 5. Derives the message key and decrypts the message
-    pub fn decrypt(
-        &mut self,
-        message: &RatchetMessage,
-        associated_data: &[u8],
-    ) -> Result<Vec<u8>, Error> {
+    pub fn decrypt(&mut self, message: &RatchetMessage, ad: &[u8]) -> Result<Vec<u8>, Error> {
         // Try to decrypt with skipped message keys
-        if let Some(plaintext) = self.try_skipped_message_keys(message, associated_data)? {
+        if let Some(plaintext) = self.try_skipped_message_keys(message, ad)? {
             return Ok(plaintext);
         }
 
@@ -279,8 +265,8 @@ impl DoubleRatchet {
         })?;
 
         // Check if ratchet public key has changed
-        if self.state.remote_public_dh_key.is_none()
-            || header.public_key != self.state.remote_public_dh_key.unwrap()
+        if self.state.remote_dh_key_public.is_none()
+            || header.public_key != self.state.remote_dh_key_public.unwrap()
         {
             // Ratchet step - DH key has changed
             self.dh_ratchet(&header).map_err(|err| {
@@ -302,7 +288,7 @@ impl DoubleRatchet {
         let message_key = self.state.receiving_chain.next();
 
         let plaintext = with_ad_buffer(|buffer| {
-            buffer.extend_from_slice(associated_data);
+            buffer.extend_from_slice(ad);
             buffer.extend_from_slice(&message.header);
             Self::decrypt_message(&message_key, &message.ciphertext, buffer)
         })
@@ -368,7 +354,7 @@ impl DoubleRatchet {
     fn try_skipped_message_keys(
         &mut self,
         message: &RatchetMessage,
-        associated_data: &[u8],
+        ad: &[u8],
     ) -> Result<Option<Vec<u8>>, Error> {
         for ((header_key, message_no), message_key) in &self.skipped_message_keys {
             if let Some(header) = self.decrypt_header(&message.header, header_key) {
@@ -377,7 +363,7 @@ impl DoubleRatchet {
                 }
 
                 let plaintext = with_ad_buffer(|buffer| {
-                    buffer.extend_from_slice(associated_data);
+                    buffer.extend_from_slice(ad);
                     buffer.extend_from_slice(&message.header);
                     Self::decrypt_message(message_key, &message.ciphertext, buffer)
                 })?;
@@ -397,7 +383,7 @@ impl DoubleRatchet {
         self.state.previous_sending_chain_length = self.state.sending_chain.get_index();
 
         // Update remote public key
-        self.state.remote_public_dh_key = Some(header.public_key);
+        self.state.remote_dh_key_public = Some(header.public_key);
 
         // Reset message counters
         self.state.receiving_message_number = 0;
@@ -455,11 +441,7 @@ impl DoubleRatchet {
     }
 
     /// Encrypt a message
-    fn encrypt_message(
-        key: &[u8; 32],
-        plaintext: &[u8],
-        associated_data: &[u8],
-    ) -> Result<Vec<u8>, Error> {
+    fn encrypt_message(key: &[u8; 32], plaintext: &[u8], ad: &[u8]) -> Result<Vec<u8>, Error> {
         // Derive encryption key, authentication key, and IV from the message key
         let hkdf = Hkdf::<Sha256>::new(None, key);
 
@@ -482,18 +464,14 @@ impl DoubleRatchet {
                 nonce,
                 aes_gcm_siv::aead::Payload {
                     msg: plaintext,
-                    aad: associated_data,
+                    aad: ad,
                 },
             )
             .map_err(|_| Error::Protocol("Message encryption failed".to_string()))
     }
 
     /// Decrypt a message
-    fn decrypt_message(
-        key: &[u8; 32],
-        ciphertext: &[u8],
-        associated_data: &[u8],
-    ) -> Result<Vec<u8>, Error> {
+    fn decrypt_message(key: &[u8; 32], ciphertext: &[u8], ad: &[u8]) -> Result<Vec<u8>, Error> {
         let hkdf = Hkdf::<Sha256>::new(None, key);
 
         let mut derived_material = [0u8; 80];
@@ -512,7 +490,7 @@ impl DoubleRatchet {
                 nonce,
                 aes_gcm_siv::aead::Payload {
                     msg: ciphertext,
-                    aad: associated_data,
+                    aad: ad,
                 },
             )
             .map_err(|_| Error::Protocol("Message decryption failed".to_string()))
@@ -522,7 +500,7 @@ impl DoubleRatchet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{IdentityKey, OneTimePreKey, PreKeyBundle, SignedPreKey, X3DH};
+    use crate::{IdentityKey, OneTimePreKey, SessionPreKeyBundle, SignedPreKey, X3DH};
     use rand::TryRngCore;
     use rand::rngs::OsRng;
 
@@ -687,7 +665,7 @@ mod tests {
         let bob_one_time_pre_key = OneTimePreKey::new(1);
 
         // 2. Create Bob's bundle
-        let bob_bundle = PreKeyBundle::new(
+        let bob_bundle = SessionPreKeyBundle::new(
             &bob_identity,
             &bob_signed_pre_key,
             Some(&bob_one_time_pre_key),
@@ -702,7 +680,7 @@ mod tests {
         // 4. Alice initializes her Double Ratchet with the shared secret
         let mut alice_ratchet = DoubleRatchet::initialize_for_alice(
             alice_x3dh_result.shared_secret(),
-            &bob_bundle.public_signed_pre_key(),
+            &bob_bundle.spk_public().1,
         );
         // 5. Bob processes Alice's initiation
         let bob_shared_secret = x3dh
@@ -710,7 +688,7 @@ mod tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
-                &alice_identity.public_dh_key(),
+                &alice_identity.dh_key_public(),
                 &alice_public_key,
             )
             .unwrap();

@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod integration_tests {
-    use zealot::{DoubleRatchet, IdentityKey, OneTimePreKey, PreKeyBundle, SignedPreKey, X3DH};
+    use zealot::{
+        DoubleRatchet, IdentityKey, OneTimePreKey, SessionPreKeyBundle, SignedPreKey, X3DH,
+    };
 
     #[test]
     fn test_full_protocol_flow() {
@@ -16,7 +18,7 @@ mod integration_tests {
 
         // Step 3: Bob publishes his pre-key bundle
         println!("Step 3: Bob creates and publishes his pre-key bundle...");
-        let bob_bundle = PreKeyBundle::new(
+        let bob_bundle = SessionPreKeyBundle::new(
             &bob_identity,
             &bob_signed_pre_key,
             Some(&bob_one_time_pre_key),
@@ -38,7 +40,7 @@ mod integration_tests {
         println!("Step 6: Alice initializes Double Ratchet...");
         let mut alice_ratchet = DoubleRatchet::initialize_for_alice(
             alice_x3dh_result.shared_secret(),
-            &bob_bundle.public_signed_pre_key(),
+            &bob_bundle.spk_public().1,
         );
 
         // Step 7: Alice sends an initial message to Bob
@@ -61,7 +63,7 @@ mod integration_tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
-                &alice_identity.public_dh_key(),
+                &alice_identity.dh_key_public(),
                 &alice_ephemeral_public,
             )
             .unwrap();
@@ -206,7 +208,7 @@ mod integration_tests {
         // Bob's pre-keys
         let bob_signed_pre_key = SignedPreKey::new(1);
         let bob_one_time_pre_key = OneTimePreKey::new(1);
-        let bob_bundle = PreKeyBundle::new(
+        let bob_bundle = SessionPreKeyBundle::new(
             &bob_identity,
             &bob_signed_pre_key,
             Some(&bob_one_time_pre_key),
@@ -215,7 +217,7 @@ mod integration_tests {
         // Charlie's pre-keys
         let charlie_signed_pre_key = SignedPreKey::new(1);
         let charlie_one_time_pre_key = OneTimePreKey::new(1);
-        let charlie_bundle = PreKeyBundle::new(
+        let charlie_bundle = SessionPreKeyBundle::new(
             &charlie_identity,
             &charlie_signed_pre_key,
             Some(&charlie_one_time_pre_key),
@@ -237,12 +239,12 @@ mod integration_tests {
         // Alice initializes Double Ratchet sessions
         let mut alice_bob_ratchet = DoubleRatchet::initialize_for_alice(
             alice_bob_x3dh.shared_secret(),
-            &bob_bundle.public_signed_pre_key(),
+            &bob_bundle.spk_public().1,
         );
 
         let mut alice_charlie_ratchet = DoubleRatchet::initialize_for_alice(
             alice_charlie_x3dh.shared_secret(),
-            &charlie_bundle.public_signed_pre_key(),
+            &charlie_bundle.spk_public().1,
         );
 
         // Bob and Charlie process X3DH
@@ -251,7 +253,7 @@ mod integration_tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
-                &alice_identity.public_dh_key(),
+                &alice_identity.dh_key_public(),
                 &alice_bob_ephemeral,
             )
             .unwrap();
@@ -261,7 +263,7 @@ mod integration_tests {
                 &charlie_identity,
                 &charlie_signed_pre_key,
                 Some(charlie_one_time_pre_key),
-                &alice_identity.public_dh_key(),
+                &alice_identity.dh_key_public(),
                 &alice_charlie_ephemeral,
             )
             .unwrap();
@@ -336,7 +338,7 @@ mod integration_tests {
         // Bob's pre-keys
         let bob_signed_pre_key = SignedPreKey::new(1);
         let bob_one_time_pre_key = OneTimePreKey::new(1);
-        let bob_bundle = PreKeyBundle::new(
+        let bob_bundle = SessionPreKeyBundle::new(
             &bob_identity,
             &bob_signed_pre_key,
             Some(&bob_one_time_pre_key),
@@ -352,7 +354,7 @@ mod integration_tests {
         // Alice initializes Double Ratchet session
         let mut alice_ratchet = DoubleRatchet::initialize_for_alice(
             alice_bob_x3dh.shared_secret(),
-            &bob_bundle.public_signed_pre_key(),
+            &bob_bundle.spk_public().1,
         );
 
         // Bob processes X3DH
@@ -361,7 +363,7 @@ mod integration_tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
-                &alice_identity.public_dh_key(),
+                &alice_identity.dh_key_public(),
                 &alice_bob_ephemeral,
             )
             .unwrap();
@@ -401,7 +403,7 @@ mod integration_tests {
         let bob_new_signed_pre_key = SignedPreKey::new(2);
         let bob_new_one_time_pre_key = OneTimePreKey::new(2);
 
-        let bob_new_bundle = PreKeyBundle::new(
+        let bob_new_bundle = SessionPreKeyBundle::new(
             &bob_identity,
             &bob_new_signed_pre_key,
             Some(&bob_new_one_time_pre_key),
@@ -416,7 +418,7 @@ mod integration_tests {
         // Alice creates a new ratchet session
         let mut alice_new_ratchet = DoubleRatchet::initialize_for_alice(
             alice_new_x3dh.shared_secret(),
-            &bob_new_bundle.public_signed_pre_key(),
+            &bob_new_bundle.spk_public().1,
         );
 
         // Bob processes the new X3DH
@@ -425,7 +427,7 @@ mod integration_tests {
                 &bob_identity,
                 &bob_new_signed_pre_key,
                 Some(bob_new_one_time_pre_key),
-                &alice_identity.public_dh_key(),
+                &alice_identity.dh_key_public(),
                 &alice_new_ephemeral,
             )
             .unwrap();

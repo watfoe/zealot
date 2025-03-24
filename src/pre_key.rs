@@ -3,6 +3,7 @@ use ed25519_dalek::ed25519::SignatureBytes;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rand::TryRngCore;
 use rand::rngs::OsRng;
+use std::collections::HashMap;
 
 /// A medium-term signed pre-key as defined in Signal's X3DH protocol.
 ///
@@ -12,7 +13,6 @@ use rand::rngs::OsRng;
 pub struct SignedPreKey {
     pre_key: X25519Secret,
     id: u32, // for referencing this pre-key
-    created_at: std::time::SystemTime,
 }
 
 impl SignedPreKey {
@@ -24,7 +24,6 @@ impl SignedPreKey {
         Self {
             pre_key: X25519Secret::from(seed),
             id,
-            created_at: std::time::SystemTime::now(),
         }
     }
 
@@ -53,12 +52,8 @@ impl SignedPreKey {
     /// The signature proves that the signed pre-key belongs to the
     /// owner of the identity key, providing authentication.
     pub fn signature(&self, identity_key: &IdentityKey) -> Signature {
-        let encoded = self.encode_for_signature();
+        let encoded = self.public_key().to_bytes();
         identity_key.sign(&encoded)
-    }
-
-    fn encode_for_signature(&self) -> [u8; 32] {
-        self.public_key().to_bytes()
     }
 
     /// Serializes the signed pre-key to a 44-byte array for storage.
@@ -67,50 +62,72 @@ impl SignedPreKey {
     /// - 4 bytes: ID (big-endian u32)
     /// - 8 bytes: Creation timestamp (big-endian u64 seconds since UNIX epoch)
     /// - 32 bytes: X25519 key
-    pub fn to_bytes(&self) -> [u8; 44] {
-        let mut result = [0u8; 44];
+    pub fn to_bytes(&self) -> [u8; 36] {
+        let mut result = [0u8; 36];
 
         // Add the ID (4 bytes)
         result[0..4].copy_from_slice(&self.id.to_be_bytes());
 
-        // Add the creation timestamp
-        let timestamp = self
-            .created_at
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        result[4..12].copy_from_slice(&timestamp.to_be_bytes());
-
         // Add the key bytes
-        result[12..44].copy_from_slice(self.pre_key.as_bytes());
+        result[4..].copy_from_slice(self.pre_key.as_bytes());
 
         result
     }
 }
 
-impl From<[u8; 44]> for SignedPreKey {
+impl From<[u8; 36]> for SignedPreKey {
     /// Deserializes a signed pre-key from a 44-byte array.
-    fn from(bytes: [u8; 44]) -> Self {
+    fn from(bytes: [u8; 36]) -> Self {
         // Extract the ID
         let mut id_bytes = [0u8; 4];
         id_bytes.copy_from_slice(&bytes[0..4]);
         let id = u32::from_be_bytes(id_bytes);
 
-        // Extract the timestamp
-        let mut timestamp_bytes = [0u8; 8];
-        timestamp_bytes.copy_from_slice(&bytes[4..12]);
-        let timestamp = u64::from_be_bytes(timestamp_bytes);
-        let created_at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(timestamp);
-
         // Extract the key
         let mut key_bytes = [0u8; 32];
-        key_bytes.copy_from_slice(&bytes[12..44]);
+        key_bytes.copy_from_slice(&bytes[4..]);
 
         Self {
             pre_key: X25519Secret::from(key_bytes),
             id,
-            created_at,
         }
+    }
+}
+
+pub struct SignedPreKeyStore {
+    pub(crate) keys: HashMap<u32, SignedPreKey>,
+    pub(crate) next_id: u32,
+    pub(crate) max_keys: usize,
+}
+
+impl SignedPreKeyStore {
+    pub(crate) fn new(max_keys: usize) -> Self {
+        let mut keys = HashMap::with_capacity(max_keys);
+        let id = 1;
+        keys.insert(id, SignedPreKey::new(id));
+
+        Self {
+            keys,
+            next_id: id + 1,
+            max_keys,
+        }
+    }
+
+    pub(crate) fn renew_key(&mut self) -> &SignedPreKey {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.keys.insert(id, SignedPreKey::new(id));
+
+        self.get_current()
+    }
+
+    pub(crate) fn get(&self, id: u32) -> Option<&SignedPreKey> {
+        self.keys.get(&id)
+    }
+
+    pub(crate) fn get_current(&self) -> &SignedPreKey {
+        let current_id = self.next_id - 1;
+        self.keys.get(&current_id).unwrap()
     }
 }
 
@@ -121,34 +138,28 @@ impl From<[u8; 44]> for SignedPreKey {
 /// - Identity key for authentication and key agreement
 /// - Signed pre-key with signature for authenticated key agreement
 /// - Optional one-time pre-key for additional security
-pub struct PreKeyBundle {
-    pub(crate) public_identity_key_dh: X25519PublicKey,
-    pub(crate) public_identity_key_verifier: VerifyingKey,
-    pub(crate) public_signed_pre_key: X25519PublicKey,
+pub struct SessionPreKeyBundle {
+    pub(crate) ik_public: X25519PublicKey,
+    pub(crate) signing_key_public: VerifyingKey,
+    pub(crate) spk_public: (u32, X25519PublicKey),
     pub(crate) signature: Signature,
-    pub(crate) signed_pre_key_id: u32,
-    pub(crate) public_one_time_pre_key: Option<X25519PublicKey>,
+    pub(crate) otpk_public: Option<(u32, X25519PublicKey)>,
 }
 
-impl PreKeyBundle {
+impl SessionPreKeyBundle {
     /// Creates a new pre-key bundle from the provided keys.
-    pub fn new(
-        identity_key: &IdentityKey,
-        signed_pre_key: &SignedPreKey,
-        one_time_pre_key: Option<&OneTimePreKey>,
-    ) -> Self {
-        let public_identity_key_dh = identity_key.public_dh_key();
-        let public_identity_key_verifier = identity_key.public_signing_key();
-        let public_signed_pre_key = signed_pre_key.public_key();
-        let signature = signed_pre_key.signature(identity_key);
+    pub fn new(ik: &IdentityKey, spk: &SignedPreKey, otpk: Option<&OneTimePreKey>) -> Self {
+        let ik_public = ik.dh_key_public();
+        let signing_key_public = ik.signing_key_public();
+        let spk_public = spk.public_key();
+        let signature = spk.signature(ik);
 
         Self {
-            public_identity_key_dh,
-            public_identity_key_verifier,
-            signed_pre_key_id: signed_pre_key.id(),
-            public_signed_pre_key,
+            ik_public,
+            signing_key_public,
+            spk_public: (spk.id(), spk_public),
             signature,
-            public_one_time_pre_key: one_time_pre_key.map(|key| key.public_key()),
+            otpk_public: otpk.map(|key| (key.id(), key.public_key())),
         }
     }
 
@@ -161,35 +172,30 @@ impl PreKeyBundle {
     ///
     /// Ok(()) if the signature is valid, or an Err otherwise.
     pub fn verify(&self) -> Result<(), Error> {
-        let encoded_key = self.public_signed_pre_key.to_bytes();
-        self.public_identity_key_verifier
+        let encoded_key = self.spk_public.1.to_bytes();
+        self.signing_key_public
             .verify(&encoded_key, &self.signature)
             .map_err(|err| Error::PreKey(err.to_string()))
     }
 
     /// Returns the public signed pre-key (SPK_pub) from this bundle.
-    pub fn public_signed_pre_key(&self) -> X25519PublicKey {
-        self.public_signed_pre_key
-    }
-
-    /// Returns the ID of the signed pre-key in this bundle.
-    pub fn signed_pre_key_id(&self) -> u32 {
-        self.signed_pre_key_id
+    pub fn spk_public(&self) -> (u32, X25519PublicKey) {
+        self.spk_public
     }
 
     /// Returns the public identity key (IK_pub) for DH operations.
-    pub fn public_identity_key(&self) -> X25519PublicKey {
-        self.public_identity_key_dh
+    pub fn ik_public(&self) -> X25519PublicKey {
+        self.ik_public
     }
 
     /// Returns the public verification key for the identity.
-    pub fn public_identity_key_verifier(&self) -> VerifyingKey {
-        self.public_identity_key_verifier
+    pub fn signing_key_public(&self) -> VerifyingKey {
+        self.signing_key_public
     }
 
     /// Returns the optional one-time pre-key (OPK_pub) from this bundle.
-    pub fn public_one_time_pre_key(&self) -> Option<X25519PublicKey> {
-        self.public_one_time_pre_key
+    pub fn otpk_public(&self) -> Option<(u32, X25519PublicKey)> {
+        self.otpk_public
     }
 
     /// Returns the optional one-time pre-key (OPK_pub) from this bundle.
@@ -198,23 +204,40 @@ impl PreKeyBundle {
     }
 
     pub fn try_from(
-        public_identity_key_dh: [u8; 32],
-        public_identity_key_verifier: [u8; 32],
-        public_signed_pre_key: [u8; 32],
+        ik_public: [u8; 32],
+        signing_key_public: [u8; 32],
+        spk_public: (u32, [u8; 32]),
         signature: [u8; 64],
-        signed_pre_key_id: u32,
-        public_one_time_pre_key: Option<[u8; 32]>,
+        otpk_public: Option<(u32, [u8; 32])>,
     ) -> Result<Self, Error> {
         Ok(Self {
-            public_identity_key_dh: X25519PublicKey::from(public_identity_key_dh),
-            public_identity_key_verifier: VerifyingKey::from_bytes(&public_identity_key_verifier)
+            ik_public: X25519PublicKey::from(ik_public),
+            signing_key_public: VerifyingKey::from_bytes(&signing_key_public)
                 .map_err(|err| Error::Serde(err.to_string()))?,
-            public_signed_pre_key: X25519PublicKey::from(public_signed_pre_key),
+            spk_public: (spk_public.0, X25519PublicKey::from(spk_public.1)),
             signature: Signature::from_bytes(&SignatureBytes::from(signature)),
-            signed_pre_key_id,
-            public_one_time_pre_key: public_one_time_pre_key
-                .map(|otpk| X25519PublicKey::from(otpk)),
+            otpk_public: otpk_public.map(|(id, otpk)| (id, X25519PublicKey::from(otpk))),
         })
+    }
+}
+
+pub struct AccountPreKeyBundle {
+    pub ik_public: X25519PublicKey,
+    pub signing_key_public: VerifyingKey,
+    pub spk_public: (u32, X25519PublicKey),
+    pub signature: Signature,
+    pub otpks_public: HashMap<u32, X25519PublicKey>,
+}
+
+impl From<&AccountPreKeyBundle> for SessionPreKeyBundle {
+    fn from(value: &AccountPreKeyBundle) -> Self {
+        Self {
+            ik_public: value.ik_public,
+            signing_key_public: value.signing_key_public,
+            spk_public: (value.spk_public.0, value.spk_public.1),
+            signature: value.signature,
+            otpk_public: None,
+        }
     }
 }
 
@@ -240,8 +263,8 @@ mod tests {
         let original_key = SignedPreKey::new(42);
         let serialized = original_key.to_bytes();
 
-        // Ensure we have enough bytes (4 for ID, 8 for timestamp, 32 for key)
-        assert_eq!(serialized.len(), 44);
+        // Ensure we have enough bytes (4 for ID, 32 for key)
+        assert_eq!(serialized.len(), 36);
 
         // Deserialize and check if it matches
         let deserialized_key = SignedPreKey::from(serialized);
@@ -273,23 +296,22 @@ mod tests {
         let pre_key = SignedPreKey::new(99);
 
         // Create a bundle
-        let bundle = PreKeyBundle::new(&identity_key, &pre_key, None);
+        let session_bundle = SessionPreKeyBundle::new(&identity_key, &pre_key, None);
 
         // Verify the bundle
-        assert!(bundle.verify().is_ok());
+        assert!(session_bundle.verify().is_ok());
 
         // Create another bundle with different keys
         let another_identity = IdentityKey::new();
         // let another_pre_key = SignedPreKey::new(100);
 
         // Try to create an invalid bundle (mixing keys)
-        let invalid_bundle = PreKeyBundle {
-            public_identity_key_dh: identity_key.public_dh_key(),
-            public_identity_key_verifier: another_identity.public_signing_key(), // Wrong verify key
-            signed_pre_key_id: pre_key.id(),
-            public_signed_pre_key: pre_key.public_key(),
+        let invalid_bundle = SessionPreKeyBundle {
+            ik_public: identity_key.dh_key_public(),
+            signing_key_public: another_identity.signing_key_public(), // Wrong verify key
+            spk_public: (pre_key.id(), pre_key.public_key()),
             signature: pre_key.signature(&identity_key),
-            public_one_time_pre_key: None,
+            otpk_public: None,
         };
 
         // This should fail verification
@@ -308,10 +330,10 @@ mod tests {
         assert_eq!(signature1.to_bytes(), signature2.to_bytes());
 
         // Verify the signature directly
-        let encoded = pre_key.encode_for_signature();
+        let encoded = pre_key.public_key().to_bytes();
         assert!(
             identity_key
-                .public_signing_key()
+                .signing_key_public()
                 .verify(&encoded, &signature1)
                 .is_ok()
         );
@@ -322,11 +344,11 @@ mod tests {
         let identity_key = IdentityKey::new();
         let pre_key = SignedPreKey::new(77);
 
-        let mut bundle = PreKeyBundle::new(&identity_key, &pre_key, None);
+        let mut bundle = SessionPreKeyBundle::new(&identity_key, &pre_key, None);
 
         // Tamper with the signed pre-key
         let another_pre_key = SignedPreKey::new(78);
-        bundle.public_signed_pre_key = another_pre_key.public_key();
+        bundle.spk_public = (another_pre_key.id(), another_pre_key.public_key());
 
         // Verification should fail
         assert!(bundle.verify().is_err());

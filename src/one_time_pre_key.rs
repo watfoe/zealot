@@ -12,7 +12,6 @@ use std::collections::HashMap;
 pub struct OneTimePreKey {
     pre_key: X25519Secret,
     id: u32,
-    created_at: std::time::SystemTime,
     used: bool,
 }
 
@@ -25,7 +24,6 @@ impl OneTimePreKey {
         Self {
             pre_key: X25519Secret::from(seed),
             id,
-            created_at: std::time::SystemTime::now(),
             used: false,
         }
     }
@@ -59,62 +57,45 @@ impl OneTimePreKey {
         Ok(self.pre_key.dh(public_key).to_bytes())
     }
 
-    /// Serializes the one-time pre-key to a 45-byte array for storage.
+    /// Serializes the one-time pre-key to a 37-byte array for storage.
     ///
     /// The format is:
     /// - 4 bytes: ID (big-endian u32)
-    /// - 8 bytes: Creation timestamp (big-endian u64 seconds since UNIX epoch)
     /// - 1 byte: Used flag (0 = unused, 1 = used)
     /// - 32 bytes: X25519 key
-    pub fn to_bytes(&self) -> [u8; 45] {
-        let mut result = [0u8; 45];
+    pub fn to_bytes(&self) -> [u8; 37] {
+        let mut result = [0u8; 37];
 
         // Add the ID (4 bytes)
         result[0..4].copy_from_slice(&self.id.to_be_bytes());
 
-        // Add the creation timestamp (8 bytes)
-        let timestamp = self
-            .created_at
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        result[4..12].copy_from_slice(&timestamp.to_be_bytes());
-
         // Add the used flag (1 byte)
-        result[12..13].copy_from_slice(if self.used { &[0x1] } else { &[0] });
+        result[4] = if self.used { 1 } else { 0 };
 
         // Add the key bytes (32 bytes)
-        result[13..45].copy_from_slice(self.pre_key.as_bytes());
+        result[5..].copy_from_slice(self.pre_key.as_bytes());
 
         result
     }
 }
 
-impl From<[u8; 45]> for OneTimePreKey {
+impl From<[u8; 37]> for OneTimePreKey {
     /// Deserializes a one-time pre-key from a 45-byte array.
-    fn from(bytes: [u8; 45]) -> Self {
+    fn from(bytes: [u8; 37]) -> Self {
         let mut id_bytes = [0u8; 4];
         id_bytes.copy_from_slice(&bytes[0..4]);
         let id = u32::from_be_bytes(id_bytes);
 
-        // Extract the timestamp
-        let mut timestamp_bytes = [0u8; 8];
-        timestamp_bytes.copy_from_slice(&bytes[4..12]);
-        let timestamp = u64::from_be_bytes(timestamp_bytes);
-
-        let created_at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(timestamp);
-
         // Extract the used flag
-        let used = bytes[12] != 0;
+        let used = bytes[4] != 0;
 
         // Extract the key
         let mut key_bytes = [0u8; 32];
-        key_bytes.copy_from_slice(&bytes[13..45]);
+        key_bytes.copy_from_slice(&bytes[5..]);
 
         Self {
             pre_key: X25519Secret::from(key_bytes),
             id,
-            created_at,
             used,
         }
     }
@@ -130,7 +111,7 @@ impl OneTimePreKeyStore {
     /// Creates a new one-time pre-key store with the specified maximum key count.
     pub(crate) fn new(max_keys: usize) -> Self {
         Self {
-            keys: HashMap::new(),
+            keys: HashMap::with_capacity(max_keys),
             next_id: 1,
             max_keys,
         }
@@ -148,14 +129,9 @@ impl OneTimePreKeyStore {
         ids
     }
 
-    /// Retrieves a one-time pre-key by its ID without removing it from the store.
-    pub(crate) fn get(&self, id: u32) -> Option<&OneTimePreKey> {
-        self.keys.get(&id)
-    }
-
     /// Returns a map of all available pre-key IDs to their public keys.
-    pub(crate) fn get_public_keys(&self) -> HashMap<u32, X25519PublicKey> {
-        let mut indexed_pks = HashMap::new();
+    pub(crate) fn public_keys(&self) -> HashMap<u32, X25519PublicKey> {
+        let mut indexed_pks = HashMap::with_capacity(self.keys.len());
         self.keys.iter().for_each(|(idx, otpk)| {
             indexed_pks.insert(*idx, otpk.public_key());
         });
@@ -210,8 +186,8 @@ mod tests {
         let original_key = OneTimePreKey::new(123);
         let serialized = original_key.to_bytes();
 
-        // Ensure we have the right size
-        assert_eq!(serialized.len(), 4 + 8 + 1 + 32);
+        // Ensure we have enough bytes (4 for ID, 1 for used, 32 for key)
+        assert_eq!(serialized.len(), 37);
 
         // Deserialize and check if it matches
         let deserialized_key = OneTimePreKey::from(serialized);

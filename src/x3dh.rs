@@ -3,8 +3,8 @@ use sha2::Sha256;
 use zeroize::Zeroize;
 
 use crate::{
-    Error, IdentityKey, OneTimePreKey, PreKeyBundle, SignedPreKey, X25519PublicKey, X25519Secret,
-    generate_random_seed,
+    Error, IdentityKey, OneTimePreKey, SessionPreKeyBundle, SignedPreKey, X25519PublicKey,
+    X25519Secret, generate_random_seed,
 };
 
 const SALT: &[u8] = b"Zealot-E2E-NaCl";
@@ -96,7 +96,7 @@ impl X3DH {
     pub fn initiate_for_alice(
         &self,
         a_identity: &IdentityKey,
-        b_bundle: &PreKeyBundle,
+        b_bundle: &SessionPreKeyBundle,
     ) -> Result<X3DHResult, Error> {
         b_bundle
             .verify()
@@ -105,15 +105,13 @@ impl X3DH {
         let a_ephemeral = EphemeralKey::new();
 
         // DH1 = DH(IKa, SPKb)
-        let dh1 = a_identity.dh(&b_bundle.public_signed_pre_key());
+        let dh1 = a_identity.dh(&b_bundle.spk_public().1);
         // DH2 = DH(EKa, IKb)
-        let dh2 = a_ephemeral.dh(&b_bundle.public_identity_key());
+        let dh2 = a_ephemeral.dh(&b_bundle.ik_public());
         // DH3 = DH(EKa, SPKb)
-        let dh3 = a_ephemeral.dh(&b_bundle.public_signed_pre_key());
+        let dh3 = a_ephemeral.dh(&b_bundle.spk_public().1);
         // DH4 = DH(EKa, OPKb)
-        let dh4_opt = b_bundle
-            .public_one_time_pre_key()
-            .map(|opk| a_ephemeral.dh(&opk));
+        let dh4_opt = b_bundle.otpk_public().map(|otpk| a_ephemeral.dh(&otpk.1));
 
         let a_ephemeral_public = a_ephemeral.public_key();
 
@@ -199,7 +197,7 @@ impl X3DH {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{IdentityKey, OneTimePreKey, PreKeyBundle, SignedPreKey};
+    use crate::{IdentityKey, OneTimePreKey, SessionPreKeyBundle, SignedPreKey};
 
     #[test]
     fn test_x3dh_agreement_with_one_time_key() {
@@ -209,7 +207,7 @@ mod tests {
         let bob_signed_pre_key = SignedPreKey::new(1);
         let bob_one_time_pre_key = OneTimePreKey::new(1);
 
-        let bob_bundle = PreKeyBundle::new(
+        let bob_bundle = SessionPreKeyBundle::new(
             &bob_identity,
             &bob_signed_pre_key,
             Some(&bob_one_time_pre_key),
@@ -227,7 +225,7 @@ mod tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
-                &alice_identity.public_dh_key(),
+                &alice_identity.dh_key_public(),
                 &alice_result.ephemeral_public,
             )
             .unwrap();
@@ -242,7 +240,7 @@ mod tests {
         let bob_identity = IdentityKey::new();
         let bob_signed_pre_key = SignedPreKey::new(1);
 
-        let bob_bundle = PreKeyBundle::new(&bob_identity, &bob_signed_pre_key, None);
+        let bob_bundle = SessionPreKeyBundle::new(&bob_identity, &bob_signed_pre_key, None);
 
         let x3dh = X3DH::new(b"Test-Protocol-Info");
         let alice_result = x3dh
@@ -254,7 +252,7 @@ mod tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 None,
-                &alice_identity.public_dh_key(),
+                &alice_identity.dh_key_public(),
                 &alice_result.ephemeral_public,
             )
             .unwrap();
@@ -272,7 +270,7 @@ mod tests {
         // TODO: For this test, we need a way to create an invalid bundle
 
         // A valid bundle
-        let bob_bundle = PreKeyBundle::new(&bob_identity, &bob_signed_pre_key, None);
+        let bob_bundle = SessionPreKeyBundle::new(&bob_identity, &bob_signed_pre_key, None);
 
         // For now, we'll just test that the valid bundle passes verification
         let x3dh = X3DH::new(b"Test-Protocol-Info");
@@ -287,7 +285,7 @@ mod tests {
         let bob_identity = IdentityKey::new();
         let bob_signed_pre_key = SignedPreKey::new(1);
 
-        let bob_bundle = PreKeyBundle::new(&bob_identity, &bob_signed_pre_key, None);
+        let bob_bundle = SessionPreKeyBundle::new(&bob_identity, &bob_signed_pre_key, None);
 
         let x3dh1 = X3DH::new(b"App-A");
         let alice_result1 = x3dh1
@@ -320,7 +318,7 @@ mod tests {
         let bob_identity = IdentityKey::new();
         let bob_signed_pre_key = SignedPreKey::new(1);
 
-        let bob_bundle = PreKeyBundle::new(&bob_identity, &bob_signed_pre_key, None);
+        let bob_bundle = SessionPreKeyBundle::new(&bob_identity, &bob_signed_pre_key, None);
 
         let x3dh = X3DH::new(b"Test-Protocol-Info");
         let alice_result = x3dh

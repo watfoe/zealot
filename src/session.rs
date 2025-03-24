@@ -14,7 +14,9 @@ pub struct Session {
     pub(crate) ratchet: DoubleRatchet,
     pub(crate) created_at: SystemTime,
     pub(crate) last_used_at: SystemTime,
-    pub(crate) public_initiator_ephemeral_key: Option<X25519PublicKey>,
+    pub(crate) x3dh_spk_id: Option<u32>,
+    pub(crate) x3dh_otpk_id: Option<u32>,
+    pub(crate) x3dh_ephemeral_key_public: Option<X25519PublicKey>,
 }
 
 impl Session {
@@ -22,7 +24,9 @@ impl Session {
     pub fn new(
         session_id: String,
         ratchet: DoubleRatchet,
-        public_initiator_ephemeral_key: Option<X25519PublicKey>,
+        x3dh_spk_id: Option<u32>,
+        x3dh_otpk_id: Option<u32>,
+        x3dh_ephemeral_key_public: Option<X25519PublicKey>,
     ) -> Self {
         let now = SystemTime::now();
         Self {
@@ -30,7 +34,9 @@ impl Session {
             ratchet,
             created_at: now,
             last_used_at: now,
-            public_initiator_ephemeral_key,
+            x3dh_spk_id,
+            x3dh_otpk_id,
+            x3dh_ephemeral_key_public,
         }
     }
 
@@ -40,11 +46,11 @@ impl Session {
     }
 
     pub fn is_initiator(&self) -> bool {
-        self.public_initiator_ephemeral_key.is_some()
+        self.x3dh_ephemeral_key_public.is_some()
     }
 
-    pub fn public_initiator_ephemeral_key(&self) -> Option<X25519PublicKey> {
-        self.public_initiator_ephemeral_key
+    pub fn x3dh_ephemeral_key_public(&self) -> Option<X25519PublicKey> {
+        self.x3dh_ephemeral_key_public
     }
 
     pub fn created_at(&self) -> SystemTime {
@@ -79,7 +85,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use crate::{
-        DoubleRatchet, IdentityKey, OneTimePreKey, PreKeyBundle, Session, SignedPreKey, X3DH,
+        DoubleRatchet, IdentityKey, OneTimePreKey, SessionPreKeyBundle, Session, SignedPreKey, X3DH,
     };
 
     // Helper function to set up a test session pair
@@ -91,7 +97,7 @@ mod tests {
         let bob_one_time_pre_key = OneTimePreKey::new(1);
 
         // Create Bob's pre-key bundle
-        let bob_bundle = PreKeyBundle::new(
+        let bob_bundle = SessionPreKeyBundle::new(
             &bob_identity,
             &bob_signed_pre_key,
             Some(&bob_one_time_pre_key),
@@ -109,12 +115,18 @@ mod tests {
         // Alice initializes her Double Ratchet
         let alice_ratchet = DoubleRatchet::initialize_for_alice(
             alice_x3dh_result.shared_secret(),
-            &bob_bundle.public_signed_pre_key(),
+            &bob_bundle.spk_public().1,
         );
 
         // Create a session ID for Alice
         let alice_session_id = format!("alice-to-bob-{}", rand::random::<u32>());
-        let alice_session = Session::new(alice_session_id, alice_ratchet, Some(alice_x3dh_pub_key));
+        let alice_session = Session::new(
+            alice_session_id,
+            alice_ratchet,
+            None,
+            None,
+            Some(alice_x3dh_pub_key),
+        );
 
         // Bob processes Alice's initiation
         let bob_shared_secret = x3dh
@@ -122,7 +134,7 @@ mod tests {
                 &bob_identity,
                 &bob_signed_pre_key,
                 Some(bob_one_time_pre_key),
-                &alice_identity.public_dh_key(),
+                &alice_identity.dh_key_public(),
                 &alice_ephemeral_public,
             )
             .unwrap();
@@ -133,7 +145,7 @@ mod tests {
 
         // Create a session ID for Bob
         let bob_session_id = format!("bob-to-alice-{}", rand::random::<u32>());
-        let bob_session = Session::new(bob_session_id, bob_ratchet, None);
+        let bob_session = Session::new(bob_session_id, bob_ratchet, None, None, None);
 
         (alice_session, bob_session)
     }

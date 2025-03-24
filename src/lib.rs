@@ -28,14 +28,15 @@
 //! ### Creating Accounts and Establishing Sessions
 //!
 //! ```rust
-//! use zealot::{Account, AccountConfig, PreKeyBundle};
+//! use zealot::{Account, AccountConfig, SessionPreKeyBundle};
 //! use std::time::Duration;
 //!
 //! // Create Alice's account
 //! let config = AccountConfig {
-//!     signed_pre_key_rotation_interval: Duration::from_secs(7 * 24 * 60 * 60), // 1 week
-//!     min_one_time_pre_keys: 10,
-//!     max_one_time_pre_keys: 100,
+//!     spk_rotation_interval: Duration::from_secs(7 * 24 * 60 * 60), // 1 week
+//!     min_otpks: 10,
+//!     max_otpks: 100,
+//!     max_spks: 20,
 //!     max_skipped_messages: 100,
 //!     protocol_info: b"com.example.secureapp".to_vec(),
 //! };
@@ -45,10 +46,11 @@
 //! let mut bob = Account::new(None); // Use default config
 //!
 //! // Bob gets his pre-key bundle to publish
-//! let (bob_bundle, bob_one_time_keys) = bob.prekey_bundle();
+//! let bob_bundle = bob.prekey_bundle();
 //!
 //! // Alice creates a session with Bob
-//! let session_id = alice.create_outbound_session(&bob_bundle)
+//! let bob_session_bundle = SessionPreKeyBundle::from(&bob_bundle);
+//! let session_id = alice.create_outbound_session(&bob_session_bundle)
 //!     .expect("Failed to create session");
 //!
 //! // Alice can now use this session to send encrypted messages to Bob
@@ -57,11 +59,13 @@
 //! ### Sending and Receiving Messages
 //!
 //! ```rust
-//! # use zealot::{Account, AccountConfig, PreKeyBundle, RatchetMessage};
-//! # let mut alice = Account::new(None);
-//! # let mut bob = Account::new(None);
-//! # let (bob_bundle, _) = bob.prekey_bundle();
-//! # let alice_session_id = alice.create_outbound_session(&bob_bundle).unwrap();
+//! use zealot::{Account, AccountConfig, SessionPreKeyBundle, RatchetMessage};
+//!
+//! let mut alice = Account::new(None);
+//! let mut bob = Account::new(None);
+//! let bob_bundle = bob.prekey_bundle();
+//! let bob_session_bundle = SessionPreKeyBundle::from(&bob_bundle);
+//! let alice_session_id = alice.create_outbound_session(&bob_session_bundle).unwrap();
 //!
 //! // Alice encrypts a message for Bob
 //! let message = "Hello Bob! This is a secure message.";
@@ -77,13 +81,13 @@
 //!
 //! // Bob processes Alice's initial message and creates a session
 //! // This would normally happen after receiving Alice's message over a network
-//! let alice_identity_key = alice.identity_key().public_dh_key();
-//! let alice_ephemeral_key = alice.session(&alice_session_id).unwrap().public_initiator_ephemeral_key().unwrap();
+//! let alice_identity_key = alice.ik().dh_key_public();
+//! let alice_ephemeral_key = alice.session(&alice_session_id).unwrap().x3dh_ephemeral_key_public().unwrap();
 //!
 //! let bob_session_id = bob.create_inbound_session(
 //!     &alice_identity_key,
 //!     &alice_ephemeral_key,
-//!     bob_bundle.signed_pre_key_id(),
+//!     bob_bundle.spk_public.0,
 //!     None // Optional one-time pre-key ID
 //! ).expect("Failed to process session initiation");
 //!
@@ -130,19 +134,22 @@
 //! ### Handling Out-of-Order Messages
 //!
 //! ```rust
-//! # use zealot::{Account, RatchetMessage};
-//! # let mut alice = Account::new(None);
-//! # let mut bob = Account::new(None);
-//! # let (bob_bundle, _) = bob.prekey_bundle();
-//! # let alice_session_id = alice.create_outbound_session(&bob_bundle).unwrap();
-//! # let alice_identity_key = alice.identity_key().public_dh_key();
-//! # let alice_ephemeral_key = alice.session(&alice_session_id).unwrap().public_initiator_ephemeral_key().unwrap();
-//! # let bob_session_id = bob.create_inbound_session(
-//! #     &alice_identity_key,
-//! #     &alice_ephemeral_key,
-//! #     bob_bundle.signed_pre_key_id(),
-//! #     None
-//! # ).unwrap();
+//! use zealot::{Account, RatchetMessage, SessionPreKeyBundle};
+//!
+//! let mut alice = Account::new(None);
+//! let mut bob = Account::new(None);
+//! let bob_bundle = bob.prekey_bundle();
+//! let bob_session_bundle = SessionPreKeyBundle::from(&bob_bundle);
+//!
+//! let alice_session_id = alice.create_outbound_session(&bob_session_bundle).unwrap();
+//! let alice_identity_key = alice.ik().dh_key_public();
+//! let alice_ephemeral_key = alice.session(&alice_session_id).unwrap().x3dh_ephemeral_key_public().unwrap();
+//! let bob_session_id = bob.create_inbound_session(
+//!     &alice_identity_key,
+//!     &alice_ephemeral_key,
+//!     bob_bundle.spk_public.0,
+//!     None
+//! ).unwrap();
 //!
 //! // Alice sends multiple messages
 //! let alice_session = alice.session_mut(&alice_session_id).unwrap();
