@@ -166,7 +166,7 @@ impl X3DH {
         ephemeral_public: &X25519PublicKey,
     ) -> Result<X3DHResult, Error> {
         // IKM = DH1 || DH2 || DH3 || DH4 (if available)
-        let mut key_material = Vec::new();
+        let mut key_material = Vec::with_capacity(128);
         key_material.extend_from_slice(&dh1);
         key_material.extend_from_slice(&dh2);
         key_material.extend_from_slice(&dh3);

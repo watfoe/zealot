@@ -56,11 +56,10 @@ impl SignedPreKey {
         identity_key.sign(&encoded)
     }
 
-    /// Serializes the signed pre-key to a 44-byte array for storage.
+    /// Serializes the signed pre-key to a 36-byte array for storage.
     ///
     /// The format is:
     /// - 4 bytes: ID (big-endian u32)
-    /// - 8 bytes: Creation timestamp (big-endian u64 seconds since UNIX epoch)
     /// - 32 bytes: X25519 key
     pub fn to_bytes(&self) -> [u8; 36] {
         let mut result = [0u8; 36];
@@ -76,7 +75,7 @@ impl SignedPreKey {
 }
 
 impl From<[u8; 36]> for SignedPreKey {
-    /// Deserializes a signed pre-key from a 44-byte array.
+    /// Deserializes a signed pre-key from a 36-byte array.
     fn from(bytes: [u8; 36]) -> Self {
         // Extract the ID
         let mut id_bytes = [0u8; 4];
@@ -113,12 +112,12 @@ impl SignedPreKeyStore {
         }
     }
 
-    pub(crate) fn renew_key(&mut self) -> &SignedPreKey {
+    pub(crate) fn renew_key(&mut self) -> (u32, &SignedPreKey) {
         let id = self.next_id;
         self.next_id += 1;
         self.keys.insert(id, SignedPreKey::new(id));
 
-        self.get_current()
+        (id, self.get_current())
     }
 
     pub(crate) fn get(&self, id: u32) -> Option<&SignedPreKey> {

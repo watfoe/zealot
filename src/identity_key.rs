@@ -85,7 +85,7 @@ impl IdentityKey {
     /// Serializes the identity key to a 64-byte array.
     ///
     /// The first 32 bytes contain the Ed25519 private key,
-    /// and the last 32 bytes contain the X25519 private key.
+    /// and the last 32 bytes contain the X25519 public key.
     pub fn to_bytes(&self) -> [u8; 64] {
         let mut bytes = [0u8; 64];
         bytes[0..32].copy_from_slice(self.signing_key.as_bytes().as_slice());

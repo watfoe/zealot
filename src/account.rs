@@ -9,16 +9,23 @@ use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::SystemTime;
+use ed25519_dalek::Signature;
+
+// TODO: Design for concurrency
+// --- sessions: Arc<DashMap<String, Mutex<Session>>
+// --- spk_store: Arc<RwLock<SignedPreKeyStore>
+// --- spk_store: Arc<RwLock<SignedPreKeyStore>
+
 
 /// An `Account` represents a user in the Signal Protocol ecosystem, managing
 /// identity keys, pre-keys, and established sessions. It provides methods for
 /// creating and managing secure communication sessions with other users.
 pub struct Account {
-    pub ik: IdentityKey,
+    pub(crate) ik: IdentityKey,
+    pub(crate) spk_last_rotation: SystemTime,
+    pub(crate) sessions: HashMap<String, Session>, // session_id -> Session
     pub(crate) spk_store: SignedPreKeyStore,
-    pub spk_last_rotation: SystemTime,
     pub(crate) otpk_store: OneTimePreKeyStore,
-    pub sessions: HashMap<String, Session>, // session_id -> Session
     pub(crate) config: AccountConfig,
 }
 
@@ -48,10 +55,7 @@ impl Account {
     }
 
     /// Returns the pre-key bundle and one-time pre-keys for this account.
-    pub fn prekey_bundle(&mut self) -> AccountPreKeyBundle {
-        self.maybe_rotate_spk();
-        self.maybe_replenish_otpk_store();
-
+    pub fn prekey_bundle(&self) -> AccountPreKeyBundle {
         AccountPreKeyBundle {
             ik_public: self.ik.dh_key_public(),
             signing_key_public: self.ik.signing_key_public(),
@@ -63,10 +67,6 @@ impl Account {
 
     pub fn spk(&self) -> &SignedPreKey {
         self.spk_store.get_current()
-    }
-
-    pub fn spk_last_rotation(&self) -> SystemTime {
-        self.spk_last_rotation
     }
 
     pub fn ik(&self) -> &IdentityKey {
@@ -153,16 +153,9 @@ impl Account {
 
         self.sessions.insert(session_id.clone(), session);
 
-        self.maybe_replenish_otpk_store();
-
         Ok(session_id)
     }
-
-    /// Returns a reference to all sessions in this account
-    pub fn sessions(&self) -> &HashMap<String, Session> {
-        &self.sessions
-    }
-
+    
     /// Returns a reference to a session by its ID.
     pub fn session(&self, session_id: &str) -> Option<&Session> {
         self.sessions.get(session_id)
@@ -173,24 +166,26 @@ impl Account {
         self.sessions.get_mut(session_id)
     }
 
-    // Periodically rotate the signed pre-key
-    fn maybe_rotate_spk(&mut self) {
+    /// Periodically rotate the signed pre-key
+    pub fn rotate_spk(&mut self) -> Option<(u32, X25519PublicKey, Signature)> {
         let now = SystemTime::now();
         if now
             .duration_since(self.spk_last_rotation)
             .unwrap_or_default()
             >= self.config.spk_rotation_interval
         {
-            self.spk_store.renew_key();
+            let (id, spk) = self.spk_store.renew_key();
             self.spk_last_rotation = now;
+            
+            Some((id, spk.public_key(), spk.signature(&self.ik)))
+        } else {
+            None
         }
     }
 
-    // Ensure we have enough one-time pre-keys
-    fn maybe_replenish_otpk_store(&mut self) {
-        if self.otpk_store.count() < self.config.min_otpks {
-            self.otpk_store.replenish();
-        }
+    /// Replenish one-time pre-keys
+    pub fn replenish_otpks(&mut self) -> Vec<X25519PublicKey> {
+        self.otpk_store.replenish()
     }
 
     /// Derive a unique session ID from identities
@@ -256,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_account_key_bundle_generation() {
-        let mut account = Account::new(None);
+        let account = Account::new(None);
 
         let account_bundle = account.prekey_bundle();
         let prekey_bundle = SessionPreKeyBundle::from(&account_bundle);
@@ -275,7 +270,7 @@ mod tests {
     #[test]
     fn test_account_session_management() {
         let mut alice_account = Account::new(None);
-        let mut bob_account = Account::new(None);
+        let bob_account = Account::new(None);
 
         let bob_bundle = bob_account.prekey_bundle();
         let bob_session_bundle = SessionPreKeyBundle::from(&bob_bundle);
@@ -303,8 +298,7 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(10));
 
-        let new_bundle = account.prekey_bundle();
-        let new_spk_id = new_bundle.spk_public.0;
+        let (new_spk_id, _, _) = account.rotate_spk().unwrap();
 
         assert_ne!(
             initial_spk_id, new_spk_id,

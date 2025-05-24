@@ -107,7 +107,7 @@ impl Account {
     pub fn serialize(&self) -> Result<Vec<u8>, Error> {
         let ik_bytes = self.ik().to_bytes();
         let spk_rotation_secs = self
-            .spk_last_rotation()
+            .spk_last_rotation
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
