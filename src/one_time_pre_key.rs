@@ -118,15 +118,15 @@ impl OneTimePreKeyStore {
     }
 
     /// Generates a specified number of new one-time pre-keys.
-    pub(crate) fn generate_keys(&mut self, count: usize) -> Vec<X25519PublicKey> {
-        let mut keys = Vec::with_capacity(count);
+    pub(crate) fn generate_keys(&mut self, count: usize) -> HashMap<u32, X25519PublicKey> {
+        let mut keys = HashMap::with_capacity(count);
         for _ in 0..count {
             let id = self.next_id;
             let key = OneTimePreKey::new(id);
             let key_public = key.public_key();
             self.next_id += 1;
             self.keys.insert(id, key);
-            keys.push(key_public);
+            keys.insert(id, key_public);
         }
         keys
     }
@@ -152,7 +152,7 @@ impl OneTimePreKeyStore {
     }
 
     /// Generates additional pre-keys to maintain the desired pool size.
-    pub(crate) fn replenish(&mut self) -> Vec<X25519PublicKey> {
+    pub(crate) fn replenish(&mut self) -> HashMap<u32, X25519PublicKey> {
         let needed = self.max_keys.saturating_sub(self.keys.len());
         self.generate_keys(needed)
     }

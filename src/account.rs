@@ -184,7 +184,7 @@ impl Account {
     }
 
     /// Replenish one-time pre-keys
-    pub fn replenish_otpks(&mut self) -> Vec<X25519PublicKey> {
+    pub fn replenish_otpks(&mut self) -> HashMap<u32, X25519PublicKey> {
         self.otpk_store.replenish()
     }
 
