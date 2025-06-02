@@ -1,7 +1,7 @@
 syntax = "proto3";
 package zealot;
 
-message SessionPreKeyBundleProto {
+message X3DHPublicKeysProto {
     bytes ik_public = 1;
     bytes signing_key_public = 2;
     uint32 spk_id = 3;

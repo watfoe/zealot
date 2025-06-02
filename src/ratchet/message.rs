@@ -2,20 +2,14 @@ use crate::{Error, X25519PublicKey};
 
 /// Header for a ratchet message
 #[derive(Clone, Debug)]
-pub struct MessageHeader {
-    pub public_key: X25519PublicKey,
-    pub previous_chain_length: u32,
-    pub message_number: u32,
+pub(super) struct MessageHeader {
+    pub(super) public_key: X25519PublicKey,
+    pub(super) previous_chain_length: u32,
+    pub(super) message_number: u32,
 }
 
 impl MessageHeader {
-    pub fn serialize(&self, buffer: &mut Vec<u8>) {
-        buffer.extend_from_slice(self.public_key.as_bytes());
-        buffer.extend_from_slice(&self.previous_chain_length.to_be_bytes());
-        buffer.extend_from_slice(&self.message_number.to_be_bytes());
-    }
-
-    pub fn to_bytes(&self) -> [u8; 40] {
+    pub(super) fn to_bytes(&self) -> [u8; 40] {
         let mut bytes = [0u8; 40];
         bytes[0..32].copy_from_slice(self.public_key.as_bytes());
         bytes[32..36].copy_from_slice(&self.previous_chain_length.to_be_bytes());
@@ -48,13 +42,21 @@ impl From<[u8; 40]> for MessageHeader {
     }
 }
 
+/// An encrypted message in the Double Ratchet protocol.
+///
+/// Contains an encrypted header with metadata and the encrypted message payload.
 #[derive(Clone)]
 pub struct RatchetMessage {
+    /// Encrypted header containing ratchet metadata.
     pub header: Vec<u8>,
+    /// Encrypted message payload.
     pub ciphertext: Vec<u8>,
 }
 
 impl RatchetMessage {
+    /// Serializes the message to bytes for transmission.
+    ///
+    /// Format: [header length (4 bytes)][header][ciphertext]
     pub fn to_bytes(self) -> Vec<u8> {
         // Format: [header length][header][ciphertext]
         let mut result = Vec::with_capacity(4 + self.header.len() + self.ciphertext.len());
@@ -66,6 +68,7 @@ impl RatchetMessage {
         result
     }
 
+    /// Deserializes a message from bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.len() < 4 {
             return Err(Error::Protocol("Invalid message format".to_string()));

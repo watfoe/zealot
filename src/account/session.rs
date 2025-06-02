@@ -1,27 +1,33 @@
-use crate::{DoubleRatchet, Error, RatchetMessage, X25519PublicKey};
+use crate::X25519PublicKey;
+use crate::{DoubleRatchet, Error, RatchetMessage};
 use std::time::SystemTime;
 
 /// A secure messaging session between two parties.
 ///
-/// A Session represents an established secure communication channel between
-/// two parties using the Signal Protocol. It encapsulates a Double Ratchet
-/// instance along with metadata about the session.
+/// Represents an established secure communication channel using the Signal Protocol.
+/// Encapsulates a Double Ratchet instance along with metadata about the session.
 ///
 /// Sessions are typically created after a successful X3DH key agreement and
 /// are used to encrypt and decrypt messages between the two parties.
 pub struct Session {
-    pub(crate) session_id: String,
+    /// Unique identifier for this session.
+    pub session_id: String,
     pub(crate) ratchet: DoubleRatchet,
-    pub(crate) created_at: SystemTime,
-    pub(crate) last_used_at: SystemTime,
-    pub(crate) x3dh_spk_id: Option<u32>,
-    pub(crate) x3dh_otpk_id: Option<u32>,
-    pub(crate) x3dh_ephemeral_key_public: Option<X25519PublicKey>,
+    /// When this session was created.
+    pub created_at: SystemTime,
+    /// When this session was last used for encryption or decryption.
+    pub last_used_at: SystemTime,
+    /// ID of the signed pre-key used in X3DH key agreement.
+    pub x3dh_spk_id: Option<u32>,
+    /// ID of the one-time pre-key used in X3DH key agreement.
+    pub x3dh_otpk_id: Option<u32>,
+    /// Ephemeral public key from X3DH key agreement.
+    pub x3dh_ephemeral_key_public: Option<X25519PublicKey>,
 }
 
 impl Session {
     /// Creates a new session with the given parameters.
-    pub fn new(
+    pub(crate) fn new(
         session_id: String,
         ratchet: DoubleRatchet,
         x3dh_spk_id: Option<u32>,
@@ -38,35 +44,6 @@ impl Session {
             x3dh_otpk_id,
             x3dh_ephemeral_key_public,
         }
-    }
-
-    /// Returns the unique session identifier.
-    pub fn session_id(&self) -> String {
-        self.session_id.clone()
-    }
-
-    pub fn is_initiator(&self) -> bool {
-        self.x3dh_ephemeral_key_public.is_some()
-    }
-
-    pub fn x3dh_ephemeral_key_public(&self) -> Option<X25519PublicKey> {
-        self.x3dh_ephemeral_key_public
-    }
-
-    pub fn x3dh_spk_id(&self) -> Option<u32> {
-        self.x3dh_spk_id
-    }
-
-    pub fn x3dh_otpk_id(&self) -> Option<u32> {
-        self.x3dh_otpk_id
-    }
-
-    pub fn created_at(&self) -> SystemTime {
-        self.created_at
-    }
-
-    pub fn last_used_at(&self) -> SystemTime {
-        self.last_used_at
     }
 
     /// Encrypts a message using this session.
@@ -93,19 +70,19 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use crate::{
-        DoubleRatchet, IdentityKey, OneTimePreKey, SessionPreKeyBundle, Session, SignedPreKey, X3DH,
+        DoubleRatchet, IdentityKey, OneTimePreKey, Session, SignedPreKey, X3DH, X3DHPublicKeys,
     };
 
     // Helper function to set up a test session pair
     fn create_session_pair() -> (Session, Session) {
         // Set up identities and pre-keys
-        let alice_identity = IdentityKey::new();
-        let bob_identity = IdentityKey::new();
-        let bob_signed_pre_key = SignedPreKey::new(1);
-        let bob_one_time_pre_key = OneTimePreKey::new(1);
+        let alice_identity = IdentityKey::new().unwrap();
+        let bob_identity = IdentityKey::new().unwrap();
+        let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
+        let bob_one_time_pre_key = OneTimePreKey::new(1).unwrap();
 
         // Create Bob's pre-key bundle
-        let bob_bundle = SessionPreKeyBundle::new(
+        let bob_bundle = X3DHPublicKeys::new(
             &bob_identity,
             &bob_signed_pre_key,
             Some(&bob_one_time_pre_key),
@@ -237,8 +214,8 @@ mod tests {
 
         for _ in 0..10 {
             let (alice_session, bob_session) = create_session_pair();
-            session_ids.push(alice_session.session_id());
-            session_ids.push(bob_session.session_id());
+            session_ids.push(alice_session.session_id);
+            session_ids.push(bob_session.session_id);
         }
 
         // Verify all IDs are unique
