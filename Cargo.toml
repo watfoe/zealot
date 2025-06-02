@@ -1,20 +1,42 @@
 [package]
 name = "zealot"
+description = "An implementation of the signal protocol"
+repository = "https://github.com/jimmielovell/zealot"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+
+[lints.rust]
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(fuzzing)'] }
+unsafe_code = "deny"
+missing_docs = "warn"
+dead_code = "deny"
+trivial_casts = "deny"
+trivial_numeric_casts = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+unused_extern_crates = "deny"
+unused_import_braces = "deny"
+unused_qualifications = "deny"
+rust_2018_idioms = "deny"
+
+[lints.clippy]
+panic = "deny"
+unreachable = "deny"
+expect_used = "deny"
+unwrap_used = "deny"
+mem_forget = "deny"
 
 [dependencies]
 aes-gcm-siv = "0.11.1"
 base64 = { version = "0.22.1", features = ["std"] }
-ed25519-dalek = { version = "2.1.1", features = ["rand_core", "digest"] }
+ed25519-dalek = { version = "2.1.1", features = ["rand_core", "std", "zeroize"] }
 hkdf = "0.12.4"
 hmac = "0.12.1"
-bytes = "1.10.1"
 prost = "0.13.5"
 rand = { version = "0.9.1", features = ["os_rng"] }
 sha2 = "0.10.8"
-thiserror = "2.0.11"
-x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+thiserror = "2.0.12"
+x25519-dalek = { version = "2.0.1", features = ["static_secrets", "zeroize"] }
 zeroize = "1.8.1"
 
 [build-dependencies]

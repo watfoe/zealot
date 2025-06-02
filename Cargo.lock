@@ -212,7 +212,6 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "sha2",
- "signature",
  "subtle",
  "zeroize",
 ]
@@ -643,7 +642,6 @@ version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
- "digest",
  "rand_core 0.6.4",
 ]
 
@@ -851,7 +849,6 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm-siv",
  "base64",
- "bytes",
  "ed25519-dalek",
  "hkdf",
  "hmac",

@@ -1,8 +1,14 @@
-use crate::chain::Chain;
+mod chain;
+mod message;
+mod state;
+
+use crate::X3DHSharedSecret;
 use crate::error::Error;
-use crate::ratchet_message::{MessageHeader, RatchetMessage};
-use crate::state::RatchetState;
-use crate::{X25519PublicKey, X25519Secret, generate_random_seed};
+use crate::generate_random_seed;
+pub(crate) use crate::ratchet::chain::Chain;
+pub use crate::ratchet::message::{MessageHeader, RatchetMessage};
+pub(crate) use crate::ratchet::state::RatchetState;
+use crate::{X25519PublicKey, X25519Secret};
 use aes_gcm_siv::aead::Aead;
 use aes_gcm_siv::{Aes256GcmSiv, KeyInit, Nonce};
 use hkdf::Hkdf;
@@ -11,7 +17,7 @@ use sha2::Sha256;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use x25519_dalek::SharedSecret;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 const NONCE_SIZE: usize = 12; // AES-GCM uses 12-byte (96-bit) nonces
 
@@ -45,18 +51,21 @@ where
 pub struct DoubleRatchet {
     pub(crate) state: RatchetState,
     // Map<(header_key, message_no): message_key>
-    pub(crate) skipped_message_keys: HashMap<([u8; 32], u32), [u8; 32]>,
+    pub(crate) skipped_message_keys: HashMap<(Box<[u8; 32]>, u32), Box<[u8; 32]>>,
     pub(crate) max_skip: u32,
 }
 
-impl Drop for DoubleRatchet {
-    fn drop(&mut self) {
+impl Zeroize for DoubleRatchet {
+    fn zeroize(&mut self) {
+        self.state.zeroize();
         for (_, key) in self.skipped_message_keys.drain() {
             let mut key_copy = key;
             key_copy.zeroize();
         }
     }
 }
+
+impl ZeroizeOnDrop for DoubleRatchet {}
 
 impl DoubleRatchet {
     /// Get the current dh ratchet public key
@@ -69,20 +78,21 @@ impl DoubleRatchet {
     /// This is typically called by Alice after the X3DH key agreement,
     /// using the shared secret from X3DH and Bob's signed pre-key.
     pub fn initialize_for_alice(
-        mut shared_secret: [u8; 32],
+        mut shared_secret: X3DHSharedSecret,
         bob_public_key: &X25519PublicKey,
     ) -> Self {
-        let dh_pair = X25519Secret::from(generate_random_seed().unwrap());
+        // TODO: We shouldn't unwrap
+        let seed = generate_random_seed().unwrap();
+        let dh_pair = X25519Secret::from(seed);
 
         // Perform initial DH and KDF
         let dh_output = dh_pair.dh(bob_public_key);
         let (new_root_key, chain_key, next_sending_header_key) =
-            Self::kdf_rk_he(&shared_secret, dh_output);
+            Self::kdf_rk_he(&shared_secret.0, dh_output);
 
         let (header_key_a, next_header_key_b) =
-            DoubleRatchet::derive_initial_header_keys(shared_secret);
+            DoubleRatchet::derive_initial_header_keys(&shared_secret);
 
-        // Securely erase the shared secret
         shared_secret.zeroize();
 
         // Initialize chains
@@ -112,15 +122,15 @@ impl DoubleRatchet {
     ///
     /// This is typically called by Bob after processing
     /// the X3DH key agreement initiated by Alice.
-    pub fn initialize_for_bob(shared_secret: [u8; 32], dh_pair: X25519Secret) -> Self {
+    pub fn initialize_for_bob(shared_secret: X3DHSharedSecret, dh_pair: X25519Secret) -> Self {
         let (header_key_a, next_header_key_b) =
-            DoubleRatchet::derive_initial_header_keys(shared_secret);
+            DoubleRatchet::derive_initial_header_keys(&shared_secret);
 
         Self {
             state: RatchetState {
                 dh_pair,
-                root_key: shared_secret,
-                receiving_header_key: Some(header_key_a),
+                root_key: shared_secret.0.clone(),
+                receiving_header_key: Some(header_key_a.clone()),
                 next_sending_header_key: next_header_key_b,
                 next_receiving_header_key: Some(header_key_a),
                 remote_dh_key_public: None,
@@ -136,16 +146,21 @@ impl DoubleRatchet {
         }
     }
 
-    fn derive_initial_header_keys(shared_secret: [u8; 32]) -> ([u8; 32], [u8; 32]) {
-        let hkdf = Hkdf::<Sha256>::new(None, &shared_secret);
+    fn derive_initial_header_keys(
+        shared_secret: &X3DHSharedSecret,
+    ) -> (Box<[u8; 32]>, Box<[u8; 32]>) {
+        let hkdf = Hkdf::<Sha256>::new(None, &shared_secret.0.clone().to_vec());
 
-        let mut header_key_a = [0u8; 32];
-        let mut next_header_key_b = [0u8; 32];
+        let mut header_key_a = Box::new([0u8; 32]);
+        let mut next_header_key_b = Box::new([0u8; 32]);
 
-        hkdf.expand(b"Zealot-Header-Key-A", &mut header_key_a)
+        hkdf.expand(b"Zealot-Header-Key-A", header_key_a.as_mut_slice())
             .expect("HKDF expansion failed");
-        hkdf.expand(b"Zealot-Next-Header-Key-B", &mut next_header_key_b)
-            .expect("HKDF expansion failed");
+        hkdf.expand(
+            b"Zealot-Next-Header-Key-B",
+            next_header_key_b.as_mut_slice(),
+        )
+        .expect("HKDF expansion failed");
 
         (header_key_a, next_header_key_b)
     }
@@ -161,20 +176,20 @@ impl DoubleRatchet {
     fn kdf_rk_he(
         root_key: &[u8; 32],
         mut dh_output: SharedSecret,
-    ) -> ([u8; 32], [u8; 32], [u8; 32]) {
+    ) -> (Box<[u8; 32]>, Box<[u8; 32]>, Box<[u8; 32]>) {
         let hkdf = Hkdf::<Sha256>::new(Some(root_key), &dh_output.to_bytes());
 
-        let mut new_root_key = [0u8; 32];
-        let mut chain_key = [0u8; 32];
-        let mut next_header_key = [0u8; 32];
+        let mut new_root_key = Box::new([0u8; 32]);
+        let mut chain_key = Box::new([0u8; 32]);
+        let mut next_header_key = Box::new([0u8; 32]);
 
-        hkdf.expand(b"Zealot-E2E-Root", &mut new_root_key)
+        hkdf.expand(b"Zealot-E2E-Root", new_root_key.as_mut_slice())
             .expect("HKDF expansion failed for root key");
 
-        hkdf.expand(b"Zealot-E2E-Chain", &mut chain_key)
+        hkdf.expand(b"Zealot-E2E-Chain", chain_key.as_mut_slice())
             .expect("HKDF expansion failed for chain key");
 
-        hkdf.expand(b"Zealot-E2E-Next-Header", &mut next_header_key)
+        hkdf.expand(b"Zealot-E2E-Next-Header", next_header_key.as_mut_slice())
             .expect("HKDF expansion failed for next header key");
 
         dh_output.zeroize();
@@ -214,17 +229,17 @@ impl DoubleRatchet {
 
     /// Encrypts a message header.
     fn encrypt_header(&self, header: &MessageHeader) -> Result<Vec<u8>, Error> {
-        if let Some(hk) = self.state.sending_header_key {
+        if let Some(hk) = self.state.sending_header_key.clone() {
             let header_bytes = header.to_bytes();
 
-            let mut nonce = [0u8; 12];
+            let mut nonce_slice = Box::new([0u8; 12]);
             rand::rng()
-                .try_fill_bytes(&mut nonce)
+                .try_fill_bytes(nonce_slice.as_mut_slice())
                 .map_err(|_| Error::Random)?;
 
-            let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(&hk);
+            let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(&hk.as_slice());
             let cipher = Aes256GcmSiv::new(key);
-            let nonce = Nonce::from_slice(&nonce);
+            let nonce = Nonce::from_slice(&nonce_slice.as_slice());
 
             let mut ciphertext = cipher
                 .encrypt(nonce, header_bytes.as_ref())
@@ -233,6 +248,8 @@ impl DoubleRatchet {
             let mut result = Vec::with_capacity(nonce.len() + ciphertext.len());
             result.extend_from_slice(nonce);
             result.append(&mut ciphertext);
+
+            nonce_slice.zeroize();
 
             Ok(result)
         } else {
@@ -303,7 +320,7 @@ impl DoubleRatchet {
     }
 
     /// Decrypts a message header using a specific header key.
-    fn decrypt_header(&self, encrypted_header: &[u8], hk: &[u8; 32]) -> Option<MessageHeader> {
+    fn decrypt_header(&self, encrypted_header: &[u8], hk: &Box<[u8; 32]>) -> Option<MessageHeader> {
         if encrypted_header.len() < 12 {
             return None;
         }
@@ -311,7 +328,7 @@ impl DoubleRatchet {
         let nonce = &encrypted_header[0..12];
         let ciphertext = &encrypted_header[12..];
 
-        let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(hk);
+        let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(hk.as_slice());
         let cipher = Aes256GcmSiv::new(key);
         let nonce = Nonce::from_slice(nonce);
 
@@ -333,13 +350,13 @@ impl DoubleRatchet {
     ///
     /// This allows for recovery if a header key rotation has happened.
     fn try_decrypt_header(&mut self, encrypted_header: &[u8]) -> Result<MessageHeader, Error> {
-        if let Some(rhk) = self.state.receiving_header_key {
+        if let Some(rhk) = self.state.receiving_header_key.clone() {
             if let Some(header) = self.decrypt_header(encrypted_header, &rhk) {
                 return Ok(header);
             }
         }
 
-        if let Some(nrhk) = self.state.next_receiving_header_key {
+        if let Some(nrhk) = self.state.next_receiving_header_key.clone() {
             if let Some(header) = self.decrypt_header(encrypted_header, &nrhk) {
                 return Ok(header);
             }
@@ -357,7 +374,7 @@ impl DoubleRatchet {
         ad: &[u8],
     ) -> Result<Option<Vec<u8>>, Error> {
         for ((header_key, message_no), message_key) in &self.skipped_message_keys {
-            if let Some(header) = self.decrypt_header(&message.header, header_key) {
+            if let Some(header) = self.decrypt_header(&message.header, &header_key) {
                 if header.message_number != *message_no {
                     continue;
                 }
@@ -365,11 +382,11 @@ impl DoubleRatchet {
                 let plaintext = with_ad_buffer(|buffer| {
                     buffer.extend_from_slice(ad);
                     buffer.extend_from_slice(&message.header);
-                    Self::decrypt_message(message_key, &message.ciphertext, buffer)
+                    Self::decrypt_message(&message_key, &message.ciphertext, buffer)
                 })?;
 
                 self.skipped_message_keys
-                    .remove(&(*header_key, *message_no));
+                    .remove(&(header_key.clone(), *message_no));
 
                 return Ok(Some(plaintext));
             }
@@ -389,8 +406,8 @@ impl DoubleRatchet {
         self.state.receiving_message_number = 0;
         self.state.sending_message_number = 0;
 
-        self.state.receiving_header_key = self.state.next_receiving_header_key;
-        self.state.sending_header_key = Some(self.state.next_sending_header_key);
+        self.state.receiving_header_key = self.state.next_receiving_header_key.clone();
+        self.state.sending_header_key = Some(self.state.next_sending_header_key.clone());
 
         // Derive new receiving chain
         let dh_output = self.state.dh_pair.dh(&header.public_key);
@@ -401,7 +418,8 @@ impl DoubleRatchet {
         self.state.next_receiving_header_key = Some(next_header_key);
 
         // Generate new DH key pair
-        self.state.dh_pair = X25519Secret::from(generate_random_seed()?);
+        let seed = generate_random_seed()?;
+        self.state.dh_pair = X25519Secret::from(seed);
 
         // Derive new sending chain
         let dh_output = self.state.dh_pair.dh(&header.public_key);
@@ -424,11 +442,11 @@ impl DoubleRatchet {
             return Err(Error::Protocol("Too many skipped messages".to_string()));
         }
 
-        if self.state.receiving_chain.chain_key != [0u8; 32] {
+        if self.state.receiving_chain.chain_key.as_ref() != &[0u8; 32] {
             while self.state.receiving_message_number < until {
                 let message_key = self.state.receiving_chain.next();
 
-                if let Some(rhk) = self.state.receiving_header_key {
+                if let Some(rhk) = self.state.receiving_header_key.clone() {
                     self.skipped_message_keys
                         .insert((rhk, self.state.receiving_message_number), message_key);
                 }
@@ -471,8 +489,12 @@ impl DoubleRatchet {
     }
 
     /// Decrypt a message
-    fn decrypt_message(key: &[u8; 32], ciphertext: &[u8], ad: &[u8]) -> Result<Vec<u8>, Error> {
-        let hkdf = Hkdf::<Sha256>::new(None, key);
+    fn decrypt_message(
+        key: &Box<[u8; 32]>,
+        ciphertext: &[u8],
+        ad: &[u8],
+    ) -> Result<Vec<u8>, Error> {
+        let hkdf = Hkdf::<Sha256>::new(None, key.as_slice());
 
         let mut derived_material = [0u8; 80];
         hkdf.expand(b"Zealot-E2E-Keys", &mut derived_material)
@@ -500,22 +522,22 @@ impl DoubleRatchet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{IdentityKey, OneTimePreKey, SessionPreKeyBundle, SignedPreKey, X3DH};
-    use rand::TryRngCore;
-    use rand::rngs::OsRng;
+    use crate::{IdentityKey, OneTimePreKey, SignedPreKey, X3DH, X3DHPublicKeys};
 
     fn create_ratchets() -> (DoubleRatchet, DoubleRatchet) {
-        let bob_spk = SignedPreKey::new(1);
+        let bob_spk = SignedPreKey::new(1).unwrap();
 
         // For simplicity, let's create a dummy shared secret
-        let mut shared_secret = [0u8; 32];
-        OsRng.try_fill_bytes(&mut shared_secret).unwrap();
+        let shared_secret = generate_random_seed().unwrap();
 
         // Initialize ratchets
-        let alice_ratchet =
-            DoubleRatchet::initialize_for_alice(shared_secret, &bob_spk.public_key());
+        let alice_ratchet = DoubleRatchet::initialize_for_alice(
+            X3DHSharedSecret(shared_secret.clone()),
+            &bob_spk.public_key(),
+        );
 
-        let bob_ratchet = DoubleRatchet::initialize_for_bob(shared_secret, bob_spk.key_pair());
+        let bob_ratchet =
+            DoubleRatchet::initialize_for_bob(X3DHSharedSecret(shared_secret), bob_spk.key_pair());
 
         (alice_ratchet, bob_ratchet)
     }
@@ -659,13 +681,13 @@ mod tests {
     #[test]
     fn test_with_x3dh() {
         // 1. Set up identities and prekeys
-        let alice_identity = IdentityKey::new();
-        let bob_identity = IdentityKey::new();
-        let bob_signed_pre_key = SignedPreKey::new(1);
-        let bob_one_time_pre_key = OneTimePreKey::new(1);
+        let alice_identity = IdentityKey::new().unwrap();
+        let bob_identity = IdentityKey::new().unwrap();
+        let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
+        let bob_one_time_pre_key = OneTimePreKey::new(1).unwrap();
 
         // 2. Create Bob's bundle
-        let bob_bundle = SessionPreKeyBundle::new(
+        let bob_bundle = X3DHPublicKeys::new(
             &bob_identity,
             &bob_signed_pre_key,
             Some(&bob_one_time_pre_key),

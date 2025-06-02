@@ -28,7 +28,7 @@
 //! ### Creating Accounts and Establishing Sessions
 //!
 //! ```rust
-//! use zealot::{Account, AccountConfig, SessionPreKeyBundle};
+//! use zealot::{Account, AccountConfig, X3DHPublicKeys};
 //! use std::time::Duration;
 //!
 //! // Create Alice's account
@@ -40,16 +40,16 @@
 //!     max_skipped_messages: 100,
 //!     protocol_info: b"com.example.secureapp".to_vec(),
 //! };
-//! let mut alice = Account::new(Some(config));
+//! let mut alice = Account::new(Some(config)).unwrap();
 //!
 //! // Create Bob's account
-//! let mut bob = Account::new(None); // Use default config
+//! let mut bob = Account::new(None).unwrap(); // Use default config
 //!
 //! // Bob gets his pre-key bundle to publish
 //! let bob_bundle = bob.prekey_bundle();
 //!
 //! // Alice creates a session with Bob
-//! let bob_session_bundle = SessionPreKeyBundle::from(&bob_bundle);
+//! let bob_session_bundle = X3DHPublicKeys::from(&bob_bundle);
 //! let session_id = alice.create_outbound_session(&bob_session_bundle)
 //!     .expect("Failed to create session");
 //!
@@ -59,12 +59,12 @@
 //! ### Sending and Receiving Messages
 //!
 //! ```rust
-//! use zealot::{Account, AccountConfig, SessionPreKeyBundle, RatchetMessage};
+//! use zealot::{Account, AccountConfig, X3DHPublicKeys, RatchetMessage};
 //!
-//! let mut alice = Account::new(None);
-//! let mut bob = Account::new(None);
+//! let mut alice = Account::new(None).unwrap();
+//! let mut bob = Account::new(None).unwrap();
 //! let bob_bundle = bob.prekey_bundle();
-//! let bob_session_bundle = SessionPreKeyBundle::from(&bob_bundle);
+//! let bob_session_bundle = X3DHPublicKeys::from(&bob_bundle);
 //! let alice_session_id = alice.create_outbound_session(&bob_session_bundle).unwrap();
 //!
 //! // Alice encrypts a message for Bob
@@ -82,7 +82,7 @@
 //! // Bob processes Alice's initial message and creates a session
 //! // This would normally happen after receiving Alice's message over a network
 //! let alice_identity_key = alice.ik().dh_key_public();
-//! let alice_ephemeral_key = alice.session(&alice_session_id).unwrap().x3dh_ephemeral_key_public().unwrap();
+//! let alice_ephemeral_key = alice.session(&alice_session_id).unwrap().x3dh_ephemeral_key_public.unwrap();
 //!
 //! let bob_session_id = bob.create_inbound_session(
 //!     &alice_identity_key,
@@ -134,16 +134,16 @@
 //! ### Handling Out-of-Order Messages
 //!
 //! ```rust
-//! use zealot::{Account, RatchetMessage, SessionPreKeyBundle};
+//! use zealot::{Account, RatchetMessage, X3DHPublicKeys};
 //!
-//! let mut alice = Account::new(None);
-//! let mut bob = Account::new(None);
+//! let mut alice = Account::new(None).unwrap();
+//! let mut bob = Account::new(None).unwrap();
 //! let bob_bundle = bob.prekey_bundle();
-//! let bob_session_bundle = SessionPreKeyBundle::from(&bob_bundle);
+//! let bob_session_bundle = X3DHPublicKeys::from(&bob_bundle);
 //!
 //! let alice_session_id = alice.create_outbound_session(&bob_session_bundle).unwrap();
 //! let alice_identity_key = alice.ik().dh_key_public();
-//! let alice_ephemeral_key = alice.session(&alice_session_id).unwrap().x3dh_ephemeral_key_public().unwrap();
+//! let alice_ephemeral_key = alice.session(&alice_session_id).unwrap().x3dh_ephemeral_key_public.unwrap();
 //! let bob_session_id = bob.create_inbound_session(
 //!     &alice_identity_key,
 //!     &alice_ephemeral_key,
@@ -208,23 +208,11 @@
 //! The security of the application depends not only on the cryptographic protocols
 //! but also on the security of the surrounding infrastructure.
 
-mod crypto;
-pub use crypto::*;
-
-mod identity_key;
-pub use identity_key::*;
-
-mod one_time_pre_key;
-pub use one_time_pre_key::OneTimePreKey;
-
-mod pre_key;
-pub use pre_key::*;
+mod types;
+pub use types::*;
 
 mod x3dh;
 pub use x3dh::*;
-
-mod ratchet_message;
-pub use ratchet_message::*;
 
 mod ratchet;
 pub use ratchet::*;
@@ -233,16 +221,7 @@ mod error;
 pub use error::Error;
 
 mod account;
-pub use account::Account;
-
-mod config;
-pub use config::AccountConfig;
-
-mod session;
-pub use session::*;
+pub use account::*;
 
 mod proto;
 pub use proto::*;
-
-pub(crate) mod chain;
-pub(crate) mod state;

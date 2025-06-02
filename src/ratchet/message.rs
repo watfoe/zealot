@@ -3,18 +3,23 @@ use crate::{Error, X25519PublicKey};
 /// Header for a ratchet message
 #[derive(Clone, Debug)]
 pub struct MessageHeader {
+    /// TODO: Add documentation here
     pub public_key: X25519PublicKey,
+    /// TODO: Add documentation here
     pub previous_chain_length: u32,
+    /// TODO: Add documentation here
     pub message_number: u32,
 }
 
 impl MessageHeader {
+    /// TODO: Add documentation here
     pub fn serialize(&self, buffer: &mut Vec<u8>) {
         buffer.extend_from_slice(self.public_key.as_bytes());
         buffer.extend_from_slice(&self.previous_chain_length.to_be_bytes());
         buffer.extend_from_slice(&self.message_number.to_be_bytes());
     }
 
+    /// TODO: Add documentation here
     pub fn to_bytes(&self) -> [u8; 40] {
         let mut bytes = [0u8; 40];
         bytes[0..32].copy_from_slice(self.public_key.as_bytes());
@@ -48,13 +53,17 @@ impl From<[u8; 40]> for MessageHeader {
     }
 }
 
+/// TODO: Add documentation here
 #[derive(Clone)]
 pub struct RatchetMessage {
+    /// TODO: Add documentation here
     pub header: Vec<u8>,
+    /// TODO: Add documentation here
     pub ciphertext: Vec<u8>,
 }
 
 impl RatchetMessage {
+    /// TODO: Add documentation here
     pub fn to_bytes(self) -> Vec<u8> {
         // Format: [header length][header][ciphertext]
         let mut result = Vec::with_capacity(4 + self.header.len() + self.ciphertext.len());
@@ -66,6 +75,7 @@ impl RatchetMessage {
         result
     }
 
+    /// TODO: Add documentation here
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.len() < 4 {
             return Err(Error::Protocol("Invalid message format".to_string()));

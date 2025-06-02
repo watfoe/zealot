@@ -1,110 +1,18 @@
-use crate::chain::Chain;
-use crate::state::RatchetState;
+use crate::ratchet::{Chain, RatchetState};
+use crate::types::X25519Secret;
 use crate::{
     Account, AccountConfig, DoubleRatchet, Error, IdentityKey, OneTimePreKey, Session,
-    SessionPreKeyBundle, SignedPreKey, X25519PublicKey, X25519Secret,
+    SignedPreKey, X25519PublicKey,
 };
-use ed25519_dalek::ed25519::SignatureBytes;
-use ed25519_dalek::{Signature, VerifyingKey};
 use prost::Message;
 use std::collections::HashMap;
 use std::time::{Duration, UNIX_EPOCH};
 
 include!(concat!(env!("OUT_DIR"), "/zealot.rs"));
 
-impl SessionPreKeyBundle {
-    pub fn serialize(&self) -> Result<Vec<u8>, Error> {
-        let (otpk_id, otpk_public) = self
-            .otpk_public
-            .map(|(id, otpk)| (Some(id), Some(otpk.to_bytes().to_vec())))
-            .unwrap_or_default();
-
-        let prekey_proto = SessionPreKeyBundleProto {
-            ik_public: self.ik_public.to_bytes().to_vec(),
-            signing_key_public: self.signing_key_public.to_bytes().to_vec(),
-            spk_id: self.spk_public().0,
-            spk_public: self.spk_public().1.to_bytes().to_vec(),
-            signature: self.signature.to_vec(),
-            otpk_public,
-            otpk_id,
-        };
-
-        let mut buf = Vec::new();
-        prekey_proto
-            .encode(&mut buf)
-            .map_err(|e| Error::Serde(format!("Failed to encode pre-key: {}", e)))?;
-
-        Ok(buf)
-    }
-
-    pub fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
-        let prekey_proto = SessionPreKeyBundleProto::decode(bytes)
-            .map_err(|e| Error::Serde(format!("Failed to decode account: {}", e)))?;
-
-        if prekey_proto.ik_public.len() != 32 {
-            return Err(Error::Serde(
-                "Invalid public diffie-hellman identity key length".to_string(),
-            ));
-        }
-        let mut pub_ik_bytes = [0u8; 32];
-        pub_ik_bytes.copy_from_slice(&prekey_proto.ik_public);
-        let ik_public = X25519PublicKey::from(pub_ik_bytes);
-
-        if prekey_proto.signing_key_public.len() != 32 {
-            return Err(Error::Serde(
-                "Invalid public identity key verifier length".to_string(),
-            ));
-        }
-        let mut pub_ikv_bytes = [0u8; 32];
-        pub_ikv_bytes.copy_from_slice(&prekey_proto.signing_key_public);
-        let signing_key_public = VerifyingKey::from_bytes(&pub_ikv_bytes)
-            .map_err(|err| Error::Serde(err.to_string()))?;
-
-        if prekey_proto.spk_public.len() != 32 {
-            return Err(Error::Serde(
-                "Invalid public signed pre-key length".to_string(),
-            ));
-        }
-        let mut pub_spk_bytes = [0u8; 32];
-        pub_spk_bytes.copy_from_slice(&prekey_proto.spk_public);
-        let spk_public = X25519PublicKey::from(pub_spk_bytes);
-
-        if prekey_proto.signature.len() != 64 {
-            return Err(Error::Serde("Invalid signature length".to_string()));
-        }
-        let mut signature_bytes = [0u8; 64];
-        signature_bytes.copy_from_slice(&prekey_proto.signature);
-        let signature = Signature::from(SignatureBytes::from(signature_bytes));
-
-        let otpk_public = if let Some(otpk) = prekey_proto.otpk_public {
-            if otpk.len() < 32 {
-                return Err(Error::Serde("Invalid One-Time Pre-Key length".to_string()));
-            }
-
-            let mut otpk_bytes = [0u8; 32];
-            otpk_bytes.copy_from_slice(&otpk);
-
-            Some((
-                prekey_proto.otpk_id.unwrap(),
-                X25519PublicKey::from(otpk_bytes),
-            ))
-        } else {
-            None
-        };
-
-        Ok(Self {
-            ik_public,
-            signing_key_public,
-            spk_public: (prekey_proto.spk_id, spk_public),
-            signature,
-            otpk_public,
-        })
-    }
-}
-
 impl Account {
     /// Serialize the account to Protocol Buffers format
-    pub fn serialize(&self) -> Result<Vec<u8>, Error> {
+    pub fn serialize(self) -> Result<Vec<u8>, Error> {
         let ik_bytes = self.ik().to_bytes();
         let spk_rotation_secs = self
             .spk_last_rotation
@@ -144,7 +52,7 @@ impl Account {
         };
 
         let mut sessions = HashMap::new();
-        for (id, session) in &self.sessions {
+        for (id, session) in self.sessions {
             sessions.insert(id.clone(), session.serialize()?);
         }
 
@@ -210,7 +118,7 @@ impl Account {
                 keys.insert(id, spk);
             }
 
-            crate::pre_key::SignedPreKeyStore {
+            crate::SignedPreKeyStore {
                 keys,
                 next_id: store.next_id,
                 max_keys: store.max_keys as usize,
@@ -232,7 +140,7 @@ impl Account {
                 keys.insert(id, OneTimePreKey::from(otpk_bytes));
             }
 
-            crate::one_time_pre_key::OneTimePreKeyStore {
+            crate::OneTimePreKeyStore {
                 keys,
                 next_id: store.next_id,
                 max_keys: store.max_keys as usize,
@@ -258,7 +166,7 @@ impl Account {
 }
 
 impl Session {
-    pub fn serialize(&self) -> Result<SessionProto, Error> {
+    pub fn serialize(self) -> Result<SessionProto, Error> {
         let created_at_secs = self
             .created_at
             .duration_since(UNIX_EPOCH)
@@ -273,7 +181,7 @@ impl Session {
 
         Ok(SessionProto {
             session_id: self.session_id.clone(),
-            ratchet: Some(serialize_ratchet(&self.ratchet)?),
+            ratchet: Some(serialize_ratchet(self.ratchet)?),
             created_at: created_at_secs,
             last_used_at: last_used_at_secs,
             x3dh_spk_id: self.x3dh_spk_id,
@@ -310,7 +218,7 @@ impl Session {
     }
 }
 
-fn serialize_ratchet(ratchet: &DoubleRatchet) -> Result<RatchetProto, Error> {
+fn serialize_ratchet(ratchet: DoubleRatchet) -> Result<RatchetProto, Error> {
     let dh_pair_bytes = ratchet.state.dh_pair.to_bytes().to_vec();
 
     let state_proto = RatchetStateProto {
@@ -389,7 +297,7 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
     if state_proto.root_key.len() != 32 {
         return Err(Error::Serde("Invalid root key length".to_string()));
     }
-    let mut root_key = [0u8; 32];
+    let mut root_key = Box::new([0u8; 32]);
     root_key.copy_from_slice(&state_proto.root_key);
 
     let sending_chain_proto = state_proto
@@ -403,8 +311,8 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
         return Err(Error::Serde("Invalid chain key length".to_string()));
     }
 
-    let mut sending_chain_key = [0u8; 32];
-    let mut receiving_chain_key = [0u8; 32];
+    let mut sending_chain_key = Box::new([0u8; 32]);
+    let mut receiving_chain_key = Box::new([0u8; 32]);
     sending_chain_key.copy_from_slice(&sending_chain_proto.chain_key);
     receiving_chain_key.copy_from_slice(&receiving_chain_proto.chain_key);
 
@@ -419,7 +327,7 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
                 "Invalid sending header key length".to_string(),
             ));
         }
-        let mut key = [0u8; 32];
+        let mut key = Box::new([0u8; 32]);
         key.copy_from_slice(&state_proto.sending_header_key);
         Some(key)
     } else {
@@ -432,7 +340,7 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
                 "Invalid receiving header key length".to_string(),
             ));
         }
-        let mut key = [0u8; 32];
+        let mut key = Box::new([0u8; 32]);
         key.copy_from_slice(&state_proto.receiving_header_key);
         Some(key)
     } else {
@@ -444,7 +352,7 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
             "Invalid next sending header key length".to_string(),
         ));
     }
-    let mut next_sending_header_key = [0u8; 32];
+    let mut next_sending_header_key = Box::new([0u8; 32]);
     next_sending_header_key.copy_from_slice(&state_proto.next_sending_header_key);
 
     let next_receiving_header_key = if !state_proto.next_receiving_header_key.is_empty() {
@@ -453,7 +361,7 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
                 "Invalid next receiving header key length".to_string(),
             ));
         }
-        let mut key = [0u8; 32];
+        let mut key = Box::new([0u8; 32]);
         key.copy_from_slice(&state_proto.next_receiving_header_key);
         Some(key)
     } else {
@@ -477,10 +385,10 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
 
     let mut skipped_message_keys = HashMap::new();
     for key in proto.skipped_message_keys {
-        let mut header_key = [0u8; 32];
+        let mut header_key = Box::new([0u8; 32]);
         header_key.copy_from_slice(&key.header_key);
 
-        let mut message_key = [0u8; 32];
+        let mut message_key = Box::new([0u8; 32]);
         message_key.copy_from_slice(&key.message_key);
 
         skipped_message_keys.insert((header_key, key.message_number), message_key);
@@ -496,24 +404,117 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Account, AccountConfig, DoubleRatchet, IdentityKey, OneTimePreKey, Session,
-        SessionPreKeyBundle, SignedPreKey, X3DH,
+        Account, AccountConfig, DoubleRatchet, Error, IdentityKey, OneTimePreKey, Session,
+        SignedPreKey, X3DH, X3DHPublicKeys, X25519PublicKey,
     };
+    use ed25519_dalek::ed25519::SignatureBytes;
+    use ed25519_dalek::{Signature, VerifyingKey};
     use prost::Message;
     use std::time::Duration;
 
     include!(concat!(env!("OUT_DIR"), "/zealot.rs"));
 
+    impl X3DHPublicKeys {
+        /// TODO: Document this
+        pub fn serialize(&self) -> Result<Vec<u8>, Error> {
+            let (otpk_id, otpk_public) = self
+                .otpk_public
+                .map(|(id, otpk)| (Some(id), Some(otpk.to_bytes().to_vec())))
+                .unwrap_or_default();
+
+            let prekey_proto = X3dhPublicKeysProto {
+                ik_public: self.ik_public.to_bytes().to_vec(),
+                signing_key_public: self.signing_key_public.to_bytes().to_vec(),
+                spk_id: self.spk_public().0,
+                spk_public: self.spk_public().1.to_bytes().to_vec(),
+                signature: self.signature.to_vec(),
+                otpk_public,
+                otpk_id,
+            };
+
+            let mut buf = Vec::new();
+            prekey_proto
+                .encode(&mut buf)
+                .map_err(|e| Error::Serde(format!("Failed to encode pre-key: {}", e)))?;
+
+            Ok(buf)
+        }
+
+        /// TODO: Document this
+        pub fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
+            let prekey_proto = X3dhPublicKeysProto::decode(bytes)
+                .map_err(|e| Error::Serde(format!("Failed to decode account: {}", e)))?;
+
+            if prekey_proto.ik_public.len() != 32 {
+                return Err(Error::Serde(
+                    "Invalid public diffie-hellman identity key length".to_string(),
+                ));
+            }
+            let mut pub_ik_bytes = [0u8; 32];
+            pub_ik_bytes.copy_from_slice(&prekey_proto.ik_public);
+            let ik_public = X25519PublicKey::from(pub_ik_bytes);
+
+            if prekey_proto.signing_key_public.len() != 32 {
+                return Err(Error::Serde(
+                    "Invalid public identity key verifier length".to_string(),
+                ));
+            }
+            let mut pub_ikv_bytes = [0u8; 32];
+            pub_ikv_bytes.copy_from_slice(&prekey_proto.signing_key_public);
+            let signing_key_public = VerifyingKey::from_bytes(&pub_ikv_bytes)
+                .map_err(|err| Error::Serde(err.to_string()))?;
+
+            if prekey_proto.spk_public.len() != 32 {
+                return Err(Error::Serde(
+                    "Invalid public signed pre-key length".to_string(),
+                ));
+            }
+            let mut pub_spk_bytes = [0u8; 32];
+            pub_spk_bytes.copy_from_slice(&prekey_proto.spk_public);
+            let spk_public = X25519PublicKey::from(pub_spk_bytes);
+
+            if prekey_proto.signature.len() != 64 {
+                return Err(Error::Serde("Invalid signature length".to_string()));
+            }
+            let mut signature_bytes = [0u8; 64];
+            signature_bytes.copy_from_slice(&prekey_proto.signature);
+            let signature = Signature::from(SignatureBytes::from(signature_bytes));
+
+            let otpk_public = if let Some(otpk) = prekey_proto.otpk_public {
+                if otpk.len() < 32 {
+                    return Err(Error::Serde("Invalid One-Time Pre-Key length".to_string()));
+                }
+
+                let mut otpk_bytes = [0u8; 32];
+                otpk_bytes.copy_from_slice(&otpk);
+
+                Some((
+                    prekey_proto.otpk_id.unwrap(),
+                    X25519PublicKey::from(otpk_bytes),
+                ))
+            } else {
+                None
+            };
+
+            Ok(Self {
+                ik_public,
+                signing_key_public,
+                spk_public: (prekey_proto.spk_id, spk_public),
+                signature,
+                otpk_public,
+            })
+        }
+    }
+
     fn create_test_session_pair() -> (Session, Session) {
         // Set up identities and pre-keys
-        let alice_identity = IdentityKey::new();
-        let bob_identity = IdentityKey::new();
-        let bob_spk = SignedPreKey::new(1);
-        let bob_one_time_pre_key = OneTimePreKey::new(1);
+        let alice_identity = IdentityKey::new().unwrap();
+        let bob_identity = IdentityKey::new().unwrap();
+        let bob_spk = SignedPreKey::new(1).unwrap();
+        let bob_one_time_pre_key = OneTimePreKey::new(1).unwrap();
 
         // Create Bob's pre-key bundle
-        let bob_bundle =
-            SessionPreKeyBundle::new(&bob_identity, &bob_spk, Some(&bob_one_time_pre_key));
+        let bob_bundle = X3DHPublicKeys::new(&bob_identity, &bob_spk, Some(&bob_one_time_pre_key));
 
         let x3dh = X3DH::new(b"Test-Session-Protocol");
         let alice_x3dh_result = x3dh
@@ -563,11 +564,11 @@ mod tests {
             max_spks: 20,
             protocol_info: b"Test-Protocol".to_vec(),
         };
-        let mut account = Account::new(Some(config));
+        let mut account = Account::new(Some(config)).unwrap();
 
-        let bob_identity = IdentityKey::new();
-        let bob_spk = SignedPreKey::new(1);
-        let bob_bundle = SessionPreKeyBundle::new(&bob_identity, &bob_spk, None);
+        let bob_identity = IdentityKey::new().unwrap();
+        let bob_spk = SignedPreKey::new(1).unwrap();
+        let bob_bundle = X3DHPublicKeys::new(&bob_identity, &bob_spk, None);
 
         let ik_pub = account.ik().dh_key_public();
         let spk_pub = account.spk().public_key();
@@ -797,14 +798,13 @@ mod tests {
 
     #[test]
     fn test_prekey_bundle_serialization_without_otpk() {
-        let identity_key = IdentityKey::new();
-        let spk = SignedPreKey::new(42);
+        let identity_key = IdentityKey::new().unwrap();
+        let spk = SignedPreKey::new(42).unwrap();
 
-        let bundle = SessionPreKeyBundle::new(&identity_key, &spk, None);
+        let bundle = X3DHPublicKeys::new(&identity_key, &spk, None);
 
         let serialized = bundle.serialize().expect("Failed to serialize");
-        let deserialized =
-            SessionPreKeyBundle::deserialize(&serialized).expect("Failed to deserialize");
+        let deserialized = X3DHPublicKeys::deserialize(&serialized).expect("Failed to deserialize");
 
         assert_eq!(
             bundle.ik_public().as_bytes(),
@@ -844,15 +844,14 @@ mod tests {
 
     #[test]
     fn test_prekey_bundle_serialization_with_otpk() {
-        let identity_key = IdentityKey::new();
-        let spk = SignedPreKey::new(99);
-        let one_time_pre_key = OneTimePreKey::new(123);
+        let identity_key = IdentityKey::new().unwrap();
+        let spk = SignedPreKey::new(99).unwrap();
+        let one_time_pre_key = OneTimePreKey::new(123).unwrap();
 
-        let bundle = SessionPreKeyBundle::new(&identity_key, &spk, Some(&one_time_pre_key));
+        let bundle = X3DHPublicKeys::new(&identity_key, &spk, Some(&one_time_pre_key));
 
         let serialized = bundle.serialize().expect("Failed to serialize");
-        let deserialized =
-            SessionPreKeyBundle::deserialize(&serialized).expect("Failed to deserialize");
+        let deserialized = X3DHPublicKeys::deserialize(&serialized).expect("Failed to deserialize");
 
         assert_eq!(
             bundle.ik_public().as_bytes(),
@@ -898,16 +897,15 @@ mod tests {
 
     #[test]
     fn test_prekey_bundle_verification_after_serialization() {
-        let identity_key = IdentityKey::new();
-        let spk = SignedPreKey::new(77);
+        let identity_key = IdentityKey::new().unwrap();
+        let spk = SignedPreKey::new(77).unwrap();
 
-        let bundle = SessionPreKeyBundle::new(&identity_key, &spk, None);
+        let bundle = X3DHPublicKeys::new(&identity_key, &spk, None);
 
         assert!(bundle.verify().is_ok(), "Original bundle should verify");
 
         let serialized = bundle.serialize().expect("Failed to serialize");
-        let deserialized =
-            SessionPreKeyBundle::deserialize(&serialized).expect("Failed to deserialize");
+        let deserialized = X3DHPublicKeys::deserialize(&serialized).expect("Failed to deserialize");
 
         assert!(
             deserialized.verify().is_ok(),
@@ -917,17 +915,16 @@ mod tests {
 
     #[test]
     fn test_prekey_bundle_serialized_size() {
-        let identity_key = IdentityKey::new();
-        let spk = SignedPreKey::new(1);
+        let identity_key = IdentityKey::new().unwrap();
+        let spk = SignedPreKey::new(1).unwrap();
 
-        let bundle_without_otpk = SessionPreKeyBundle::new(&identity_key, &spk, None);
+        let bundle_without_otpk = X3DHPublicKeys::new(&identity_key, &spk, None);
         let serialized_without_otpk = bundle_without_otpk
             .serialize()
             .expect("Failed to serialize");
 
-        let one_time_pre_key = OneTimePreKey::new(1);
-        let bundle_with_otpk =
-            SessionPreKeyBundle::new(&identity_key, &spk, Some(&one_time_pre_key));
+        let one_time_pre_key = OneTimePreKey::new(1).unwrap();
+        let bundle_with_otpk = X3DHPublicKeys::new(&identity_key, &spk, Some(&one_time_pre_key));
         let serialized_with_otpk = bundle_with_otpk.serialize().expect("Failed to serialize");
 
         assert!(
@@ -938,7 +935,7 @@ mod tests {
 
     #[test]
     fn test_prekey_bundle_deserialization_errors() {
-        let mut invalid_proto = SessionPreKeyBundleProto {
+        let mut invalid_proto = X3dhPublicKeysProto {
             ik_public: vec![0; 16], // Wrong length
             signing_key_public: vec![0; 32],
             spk_id: 1,
@@ -951,7 +948,7 @@ mod tests {
         let mut buf = Vec::new();
         invalid_proto.encode(&mut buf).expect("Failed to encode");
 
-        let result = SessionPreKeyBundle::deserialize(&buf);
+        let result = X3DHPublicKeys::deserialize(&buf);
         assert!(
             result.is_err(),
             "Should fail with invalid identity key length"
@@ -963,7 +960,7 @@ mod tests {
         let mut buf = Vec::new();
         invalid_proto.encode(&mut buf).expect("Failed to encode");
 
-        let result = SessionPreKeyBundle::deserialize(&buf);
+        let result = X3DHPublicKeys::deserialize(&buf);
         assert!(
             result.is_err(),
             "Should fail with invalid identity key verifier length"
@@ -975,7 +972,7 @@ mod tests {
         let mut buf = Vec::new();
         invalid_proto.encode(&mut buf).expect("Failed to encode");
 
-        let result = SessionPreKeyBundle::deserialize(&buf);
+        let result = X3DHPublicKeys::deserialize(&buf);
         assert!(
             result.is_err(),
             "Should fail with invalid signed pre-key length"
@@ -987,7 +984,7 @@ mod tests {
         let mut buf = Vec::new();
         invalid_proto.encode(&mut buf).expect("Failed to encode");
 
-        let result = SessionPreKeyBundle::deserialize(&buf);
+        let result = X3DHPublicKeys::deserialize(&buf);
         assert!(result.is_err(), "Should fail with invalid signature length");
 
         invalid_proto.signature = vec![0; 64];
@@ -996,7 +993,7 @@ mod tests {
         let mut buf = Vec::new();
         invalid_proto.encode(&mut buf).expect("Failed to encode");
 
-        let result = SessionPreKeyBundle::deserialize(&buf);
+        let result = X3DHPublicKeys::deserialize(&buf);
         assert!(
             result.is_err(),
             "Should fail with invalid one-time pre-key length"
@@ -1005,17 +1002,17 @@ mod tests {
 
     #[test]
     fn test_corrupted_data_deserialization() {
-        let identity_key = IdentityKey::new();
-        let spk = SignedPreKey::new(1);
+        let identity_key = IdentityKey::new().unwrap();
+        let spk = SignedPreKey::new(1).unwrap();
 
-        let bundle = SessionPreKeyBundle::new(&identity_key, &spk, None);
+        let bundle = X3DHPublicKeys::new(&identity_key, &spk, None);
         let mut serialized = bundle.serialize().expect("Failed to serialize");
 
         // Corrupt the data
         serialized.reverse();
 
         // Try to deserialize
-        let result = SessionPreKeyBundle::deserialize(&serialized);
+        let result = X3DHPublicKeys::deserialize(&serialized);
 
         if let Ok(deserialized) = result {
             assert!(

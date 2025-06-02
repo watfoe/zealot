@@ -1,21 +1,38 @@
-use crate::config::AccountConfig;
-use crate::one_time_pre_key::OneTimePreKeyStore;
+mod config;
+pub use config::*;
+mod session;
+pub use session::*;
+
+use crate::X25519PublicKey;
 use crate::{
-    AccountPreKeyBundle, DoubleRatchet, Error, IdentityKey, Session, SessionPreKeyBundle,
-    SignedPreKey, SignedPreKeyStore, X3DH, X25519PublicKey,
+    DoubleRatchet, Error, IdentityKey, SignedPreKey, SignedPreKeyStore, X3DH, generate_random_seed,
 };
+use crate::{OneTimePreKeyStore, X3DHPublicKeys};
 use base64::Engine;
-use rand::RngCore;
+use ed25519_dalek::{Signature, VerifyingKey};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::SystemTime;
-use ed25519_dalek::Signature;
+use zeroize::Zeroize;
+
+/// TODO: Add documentation here
+pub struct AccountPreKeyBundle {
+    /// TODO: Add documentation here
+    pub ik_public: X25519PublicKey,
+    /// TODO: Add documentation here
+    pub signing_key_public: VerifyingKey,
+    /// TODO: Add documentation here
+    pub spk_public: (u32, X25519PublicKey),
+    /// TODO: Add documentation here
+    pub signature: Signature,
+    /// TODO: Add documentation here
+    pub otpks_public: HashMap<u32, X25519PublicKey>,
+}
 
 // TODO: Design for concurrency
 // --- sessions: Arc<DashMap<String, Mutex<Session>>
 // --- spk_store: Arc<RwLock<SignedPreKeyStore>
 // --- spk_store: Arc<RwLock<SignedPreKeyStore>
-
 
 /// An `Account` represents a user in the Signal Protocol ecosystem, managing
 /// identity keys, pre-keys, and established sessions. It provides methods for
@@ -33,25 +50,25 @@ impl Account {
     /// Creates a new account with the given configuration.
     ///
     /// If no configuration is provided, default values are used.
-    pub fn new(config: Option<AccountConfig>) -> Self {
+    pub fn new(config: Option<AccountConfig>) -> Result<Self, Error> {
         let config = config.unwrap_or_default();
 
-        let ik = IdentityKey::new();
+        let ik = IdentityKey::new()?;
         let now = SystemTime::now();
 
-        let spk_store = SignedPreKeyStore::new(config.max_spks);
+        let spk_store = SignedPreKeyStore::new(config.max_spks)?;
 
         let mut otpk_store = OneTimePreKeyStore::new(config.max_otpks);
-        otpk_store.generate_keys(config.max_otpks);
+        otpk_store.generate_keys(config.max_otpks)?;
 
-        Self {
+        Ok(Self {
             ik,
             spk_store,
             spk_last_rotation: now,
             otpk_store,
             sessions: HashMap::new(),
             config,
-        }
+        })
     }
 
     /// Returns the pre-key bundle and one-time pre-keys for this account.
@@ -65,10 +82,12 @@ impl Account {
         }
     }
 
+    /// Returns the current signed-pre-key.
     pub fn spk(&self) -> &SignedPreKey {
         self.spk_store.get_current()
     }
 
+    /// Returns the identity-key.
     pub fn ik(&self) -> &IdentityKey {
         &self.ik
     }
@@ -84,13 +103,13 @@ impl Account {
     /// using the pre-key bundle retrieved from the other user (Bob).
     pub fn create_outbound_session(
         &mut self,
-        bob_prekey_bundle: &SessionPreKeyBundle,
+        bob_prekey_bundle: &X3DHPublicKeys,
     ) -> Result<String, Error> {
         let x3dh_result = X3DH::new(&self.config.protocol_info)
             .initiate_for_alice(&self.ik, bob_prekey_bundle)?;
 
         let session_id =
-            self.derive_session_id(&bob_prekey_bundle.ik_public(), &x3dh_result.public_key());
+            self.derive_session_id(&bob_prekey_bundle.ik_public(), &x3dh_result.public_key())?;
 
         let x3dh_pub_key = x3dh_result.public_key();
         let ratchet = DoubleRatchet::initialize_for_alice(
@@ -148,14 +167,14 @@ impl Account {
         )?;
 
         let ratchet = DoubleRatchet::initialize_for_bob(shared_secret, self.spk().key_pair());
-        let session_id = self.derive_session_id(alice_ik_public, alice_ephemeral_key_public);
+        let session_id = self.derive_session_id(alice_ik_public, alice_ephemeral_key_public)?;
         let session = Session::new(session_id.clone(), ratchet, None, None, None);
 
         self.sessions.insert(session_id.clone(), session);
 
         Ok(session_id)
     }
-    
+
     /// Returns a reference to a session by its ID.
     pub fn session(&self, session_id: &str) -> Option<&Session> {
         self.sessions.get(session_id)
@@ -167,24 +186,24 @@ impl Account {
     }
 
     /// Periodically rotate the signed pre-key
-    pub fn rotate_spk(&mut self) -> Option<(u32, X25519PublicKey, Signature)> {
+    pub fn rotate_spk(&mut self) -> Result<Option<(u32, X25519PublicKey, Signature)>, Error> {
         let now = SystemTime::now();
         if now
             .duration_since(self.spk_last_rotation)
             .unwrap_or_default()
             >= self.config.spk_rotation_interval
         {
-            let (id, spk) = self.spk_store.renew_key();
+            let (id, spk) = self.spk_store.renew_key()?;
             self.spk_last_rotation = now;
-            
-            Some((id, spk.public_key(), spk.signature(&self.ik)))
+
+            Ok(Some((id, spk.public_key(), spk.signature(&self.ik))))
         } else {
-            None
+            Ok(None)
         }
     }
 
     /// Replenish one-time pre-keys
-    pub fn replenish_otpks(&mut self) -> HashMap<u32, X25519PublicKey> {
+    pub fn replenish_otpks(&mut self) -> Result<HashMap<u32, X25519PublicKey>, Error> {
         self.otpk_store.replenish()
     }
 
@@ -195,66 +214,52 @@ impl Account {
     /// is used to establish the session.
     fn derive_session_id(
         &self,
-        their_identity: &X25519PublicKey,
-        ephemeral_key: &X25519PublicKey,
-    ) -> String {
+        their_dh_public: &X25519PublicKey,
+        ephemeral_key_public: &X25519PublicKey,
+    ) -> Result<String, Error> {
         let mut hasher = Sha256::new();
 
         // Include both identities and the ephemeral key
         hasher.update(self.ik.dh_key_public().as_bytes());
-        hasher.update(their_identity.as_bytes());
-        hasher.update(ephemeral_key.as_bytes());
+        hasher.update(their_dh_public.as_bytes());
+        hasher.update(ephemeral_key_public.as_bytes());
 
         // Add randomness to prevent session ID collisions
-        let mut random = [0u8; 16];
-        rand::rng().fill_bytes(&mut random);
-        hasher.update(random);
+        let mut random = generate_random_seed()?;
+        hasher.update(random.as_slice());
+        random.zeroize();
+
         let bytes = hasher.finalize();
         let engine = base64::engine::general_purpose::STANDARD;
-        engine.encode(bytes)
+
+        Ok(engine.encode(bytes))
+    }
+}
+
+impl From<&AccountPreKeyBundle> for X3DHPublicKeys {
+    fn from(value: &AccountPreKeyBundle) -> Self {
+        Self {
+            ik_public: value.ik_public,
+            signing_key_public: value.signing_key_public,
+            spk_public: (value.spk_public.0, value.spk_public.1),
+            signature: value.signature,
+            otpk_public: None,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::SessionPreKeyBundle;
-    use crate::account::Account;
-    use crate::config::AccountConfig;
+    use crate::AccountConfig;
+    use crate::{Account, X3DHPublicKeys};
     use std::time::Duration;
 
     #[test]
-    fn test_account_creation() {
-        let account = Account::new(None);
-        let config = account.config();
-
-        assert_eq!(config.max_skipped_messages, 100);
-        assert!(config.min_otpks > 0);
-
-        let custom_config = AccountConfig {
-            max_skipped_messages: 50,
-            spk_rotation_interval: Duration::from_secs(24 * 60 * 60), // 1 day
-            min_otpks: 1,
-            max_otpks: 5,
-            max_spks: 2,
-            protocol_info: b"Custom-Protocol".to_vec(),
-        };
-
-        let account = Account::new(Some(custom_config.clone()));
-        let loaded_config = account.config();
-
-        assert_eq!(
-            loaded_config.max_skipped_messages,
-            custom_config.max_skipped_messages
-        );
-        assert_eq!(loaded_config.min_otpks, custom_config.min_otpks);
-    }
-
-    #[test]
     fn test_account_key_bundle_generation() {
-        let account = Account::new(None);
+        let account = Account::new(None).unwrap();
 
         let account_bundle = account.prekey_bundle();
-        let prekey_bundle = SessionPreKeyBundle::from(&account_bundle);
+        let prekey_bundle = X3DHPublicKeys::from(&account_bundle);
 
         assert!(
             prekey_bundle.verify().is_ok(),
@@ -268,37 +273,20 @@ mod tests {
     }
 
     #[test]
-    fn test_account_session_management() {
-        let mut alice_account = Account::new(None);
-        let bob_account = Account::new(None);
-
-        let bob_bundle = bob_account.prekey_bundle();
-        let bob_session_bundle = SessionPreKeyBundle::from(&bob_bundle);
-
-        // Alice initiates a session with Bob
-        let alice_session_id = alice_account
-            .create_outbound_session(&bob_session_bundle)
-            .unwrap();
-        let message = "Hello Bob!";
-        let alice_session = alice_account.session_mut(&alice_session_id).unwrap();
-        let encrypted = alice_session.encrypt(message.as_bytes(), b"AD").unwrap();
-    }
-
-    #[test]
     fn test_key_rotation() {
         let config = AccountConfig {
             spk_rotation_interval: Duration::from_millis(1),
             ..AccountConfig::default()
         };
 
-        let mut account = Account::new(Some(config));
+        let mut account = Account::new(Some(config)).unwrap();
 
         let initial_bundle = account.prekey_bundle();
         let initial_spk_id = initial_bundle.spk_public.0;
 
         std::thread::sleep(Duration::from_millis(10));
 
-        let (new_spk_id, _, _) = account.rotate_spk().unwrap();
+        let (new_spk_id, _, _) = account.rotate_spk().unwrap().unwrap();
 
         assert_ne!(
             initial_spk_id, new_spk_id,

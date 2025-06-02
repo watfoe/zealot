@@ -1,24 +1,22 @@
 #[cfg(test)]
 mod integration_tests {
-    use zealot::{
-        DoubleRatchet, IdentityKey, OneTimePreKey, SessionPreKeyBundle, SignedPreKey, X3DH,
-    };
+    use zealot::{DoubleRatchet, IdentityKey, OneTimePreKey, SignedPreKey, X3DH, X3DHPublicKeys};
 
     #[test]
     fn test_full_protocol_flow() {
         // Step 1: Generate long-term identity keys
         println!("Step 1: Generating identity keys...");
-        let alice_identity = IdentityKey::new();
-        let bob_identity = IdentityKey::new();
+        let alice_identity = IdentityKey::new().unwrap();
+        let bob_identity = IdentityKey::new().unwrap();
 
         // Step 2: Bob generates pre-keys
         println!("Step 2: Bob generates pre-keys...");
-        let bob_signed_pre_key = SignedPreKey::new(1);
-        let bob_one_time_pre_key = OneTimePreKey::new(1);
+        let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
+        let bob_one_time_pre_key = OneTimePreKey::new(1).unwrap();
 
         // Step 3: Bob publishes his pre-key bundle
         println!("Step 3: Bob creates and publishes his pre-key bundle...");
-        let bob_bundle = SessionPreKeyBundle::new(
+        let bob_bundle = X3DHPublicKeys::new(
             &bob_identity,
             &bob_signed_pre_key,
             Some(&bob_one_time_pre_key),
@@ -201,23 +199,23 @@ mod integration_tests {
     fn test_multiple_sessions() {
         // This test simulates Alice talking to both Bob and Charlie
         println!("Setting up identity keys...");
-        let alice_identity = IdentityKey::new();
-        let bob_identity = IdentityKey::new();
-        let charlie_identity = IdentityKey::new();
+        let alice_identity = IdentityKey::new().unwrap();
+        let bob_identity = IdentityKey::new().unwrap();
+        let charlie_identity = IdentityKey::new().unwrap();
 
         // Bob's pre-keys
-        let bob_signed_pre_key = SignedPreKey::new(1);
-        let bob_one_time_pre_key = OneTimePreKey::new(1);
-        let bob_bundle = SessionPreKeyBundle::new(
+        let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
+        let bob_one_time_pre_key = OneTimePreKey::new(1).unwrap();
+        let bob_bundle = X3DHPublicKeys::new(
             &bob_identity,
             &bob_signed_pre_key,
             Some(&bob_one_time_pre_key),
         );
 
         // Charlie's pre-keys
-        let charlie_signed_pre_key = SignedPreKey::new(1);
-        let charlie_one_time_pre_key = OneTimePreKey::new(1);
-        let charlie_bundle = SessionPreKeyBundle::new(
+        let charlie_signed_pre_key = SignedPreKey::new(1).unwrap();
+        let charlie_one_time_pre_key = OneTimePreKey::new(1).unwrap();
+        let charlie_bundle = X3DHPublicKeys::new(
             &charlie_identity,
             &charlie_signed_pre_key,
             Some(&charlie_one_time_pre_key),
@@ -332,13 +330,13 @@ mod integration_tests {
     fn test_session_resumption_after_key_loss() {
         // This test simulates what happens when a user loses their session and has to rebuild it
         println!("Setting up identity keys...");
-        let alice_identity = IdentityKey::new();
-        let bob_identity = IdentityKey::new();
+        let alice_identity = IdentityKey::new().unwrap();
+        let bob_identity = IdentityKey::new().unwrap();
 
         // Bob's pre-keys
-        let bob_signed_pre_key = SignedPreKey::new(1);
-        let bob_one_time_pre_key = OneTimePreKey::new(1);
-        let bob_bundle = SessionPreKeyBundle::new(
+        let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
+        let bob_one_time_pre_key = OneTimePreKey::new(1).unwrap();
+        let bob_bundle = X3DHPublicKeys::new(
             &bob_identity,
             &bob_signed_pre_key,
             Some(&bob_one_time_pre_key),
@@ -400,10 +398,10 @@ mod integration_tests {
         // 3. Signal to Alice somehow that he needs to re-initialize
 
         println!("Simulating Bob's session loss...");
-        let bob_new_signed_pre_key = SignedPreKey::new(2);
-        let bob_new_one_time_pre_key = OneTimePreKey::new(2);
+        let bob_new_signed_pre_key = SignedPreKey::new(2).unwrap();
+        let bob_new_one_time_pre_key = OneTimePreKey::new(2).unwrap();
 
-        let bob_new_bundle = SessionPreKeyBundle::new(
+        let bob_new_bundle = X3DHPublicKeys::new(
             &bob_identity,
             &bob_new_signed_pre_key,
             Some(&bob_new_one_time_pre_key),
