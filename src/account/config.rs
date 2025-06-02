@@ -1,17 +1,17 @@
-/// TODO: Add documentation here
+/// Configuration parameters for an Account.
 #[derive(Clone, Debug)]
 pub struct AccountConfig {
-    /// TODO: Add documentation here
+    /// Maximum number of out-of-order messages to handle.
     pub max_skipped_messages: u32,
-    /// TODO: Add documentation here
+    /// How often to rotate the signed pre-key.
     pub spk_rotation_interval: std::time::Duration,
-    /// TODO: Add documentation here
+    /// Minimum number of one-time pre-keys to maintain.
     pub min_otpks: usize,
-    /// TODO: Add documentation here
+    /// Maximum number of one-time pre-keys to store.
     pub max_otpks: usize,
-    /// TODO: Add documentation here
+    /// Maximum number of signed pre-keys to keep.
     pub max_spks: usize,
-    /// TODO: Add documentation here
+    /// Application-specific protocol identifier for key derivation.
     pub protocol_info: Vec<u8>,
 }
 

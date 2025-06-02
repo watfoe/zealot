@@ -16,17 +16,17 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 const SALT: &[u8] = b"Zealot-E2E-NaCl";
 
-/// TODO: Add documentation here
+/// A shared secret derived from X3DH key agreement.
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct X3DHSharedSecret(pub(crate) Box<[u8; 32]>);
 
-/// The result of an X3DH key agreement initiated by A.
+/// The result of an X3DH key agreement initiated by Alice.
 ///
-/// Contains both the calculated shared secret and A's ephemeral public key
-/// that needs to be transmitted to B.
+/// Contains both the calculated shared secret and Alice's ephemeral public key
+/// that needs to be transmitted to Bob.
 pub struct X3DHInitializationResult {
     shared_secret: X3DHSharedSecret,
-    ephemeral_public: X25519PublicKey, // A's ephemeral public key (sent to B)
+    ephemeral_public: X25519PublicKey,
 }
 
 impl X3DHInitializationResult {
@@ -46,8 +46,8 @@ impl X3DHInitializationResult {
 
 /// A bundle of public keys used for X3DH key agreement.
 ///
-/// X3DHPublicKeys contains all the public key material needed by another user
-/// to establish a secure session asynchronously using the X3DH protocol:
+/// Contains all the public key material needed by another user to establish 
+/// a secure session asynchronously using the X3DH protocol:
 /// - Identity key for authentication and key agreement
 /// - Signed pre-key with signature for authenticated key agreement
 /// - Optional one-time pre-key for additional security
@@ -78,12 +78,8 @@ impl X3DHPublicKeys {
 
     /// Verifies the bundle's signature to ensure authenticity.
     ///
-    /// This verification confirms that the signed pre-key
-    /// was actually created by the owner of the identity key.
-    ///
-    /// # Returns
-    ///
-    /// Ok(()) if the signature is valid, or an Err otherwise.
+    /// This verification confirms that the signed pre-key was actually created 
+    /// by the owner of the identity key.
     pub fn verify(&self) -> Result<(), Error> {
         let encoded_key = self.spk_public.1.to_bytes();
         self.signing_key_public
@@ -91,12 +87,12 @@ impl X3DHPublicKeys {
             .map_err(|err| Error::PreKey(err.to_string()))
     }
 
-    /// Returns the public signed pre-key (SPK_pub) from this bundle.
+    /// Returns the public signed pre-key from this bundle.
     pub fn spk_public(&self) -> (u32, X25519PublicKey) {
         self.spk_public
     }
 
-    /// Returns the public identity key (IK_pub) for DH operations.
+    /// Returns the public identity key for DH operations.
     pub fn ik_public(&self) -> X25519PublicKey {
         self.ik_public
     }
@@ -106,17 +102,17 @@ impl X3DHPublicKeys {
         self.signing_key_public
     }
 
-    /// Returns the optional one-time pre-key (OPK_pub) from this bundle.
+    /// Returns the optional one-time pre-key from this bundle.
     pub fn otpk_public(&self) -> Option<(u32, X25519PublicKey)> {
         self.otpk_public
     }
 
-    /// Returns the optional one-time pre-key (OPK_pub) from this bundle.
+    /// Returns the signature for the signed pre-key.
     pub fn signature(&self) -> Signature {
         self.signature
     }
 
-    /// TODO: Add documentation here
+    /// Creates a bundle from raw byte arrays.
     pub fn try_from(
         ik_public: [u8; 32],
         signing_key_public: [u8; 32],
@@ -141,7 +137,7 @@ impl X3DHPublicKeys {
 /// party is offline. The protocol combines multiple Diffie-Hellman exchanges to provide
 /// strong security properties.
 pub struct X3DH {
-    info: Vec<u8>, // Application-specific info for the KDF
+    info: Vec<u8>,
 }
 
 impl X3DH {
@@ -156,7 +152,7 @@ impl X3DH {
         }
     }
 
-    /// Initiates a key agreement with a responder's pre-key bundle.
+    /// Initiates key agreement with a responder's pre-key bundle.
     ///
     /// This implements Alice's side of the X3DH protocol:
     /// 1. Verifies Bob's signed pre-key
@@ -194,9 +190,8 @@ impl X3DH {
 
     /// Processes an initiation message from the initiator (Alice).
     ///
-    /// This implements Bob's side of the X3DH protocol:
-    /// 1. Performs the same DH computations as Alice did
-    /// 2. Derives the same shared secret
+    /// This implements Bob's side of the X3DH protocol by performing the same 
+    /// DH computations as Alice and deriving the same shared secret.
     pub fn initiate_for_bob(
         &self,
         b_identity: &IdentityKey,

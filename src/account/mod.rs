@@ -15,17 +15,19 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 use zeroize::Zeroize;
 
-/// TODO: Add documentation here
+/// A bundle containing all public keys for an account.
+///
+/// Used to publish all available pre-keys for other users to initiate sessions.
 pub struct AccountPreKeyBundle {
-    /// TODO: Add documentation here
+    /// Public identity key for DH operations.
     pub ik_public: X25519PublicKey,
-    /// TODO: Add documentation here
+    /// Public verification key for the identity.
     pub signing_key_public: VerifyingKey,
-    /// TODO: Add documentation here
+    /// Current signed pre-key with its ID.
     pub spk_public: (u32, X25519PublicKey),
-    /// TODO: Add documentation here
+    /// Signature for the signed pre-key.
     pub signature: Signature,
-    /// TODO: Add documentation here
+    /// All available one-time pre-keys.
     pub otpks_public: HashMap<u32, X25519PublicKey>,
 }
 
@@ -34,13 +36,14 @@ pub struct AccountPreKeyBundle {
 // --- spk_store: Arc<RwLock<SignedPreKeyStore>
 // --- spk_store: Arc<RwLock<SignedPreKeyStore>
 
-/// An `Account` represents a user in the Signal Protocol ecosystem, managing
-/// identity keys, pre-keys, and established sessions. It provides methods for
-/// creating and managing secure communication sessions with other users.
+/// A user account in the Signal Protocol ecosystem.
+///
+/// Manages identity keys, pre-keys, and established sessions. Provides methods 
+/// for creating and managing secure communication sessions with other users.
 pub struct Account {
     pub(crate) ik: IdentityKey,
     pub(crate) spk_last_rotation: SystemTime,
-    pub(crate) sessions: HashMap<String, Session>, // session_id -> Session
+    pub(crate) sessions: HashMap<String, Session>,
     pub(crate) spk_store: SignedPreKeyStore,
     pub(crate) otpk_store: OneTimePreKeyStore,
     pub(crate) config: AccountConfig,
@@ -71,7 +74,7 @@ impl Account {
         })
     }
 
-    /// Returns the pre-key bundle and one-time pre-keys for this account.
+    /// Returns the complete pre-key bundle for this account.
     pub fn prekey_bundle(&self) -> AccountPreKeyBundle {
         AccountPreKeyBundle {
             ik_public: self.ik.dh_key_public(),
@@ -82,12 +85,12 @@ impl Account {
         }
     }
 
-    /// Returns the current signed-pre-key.
+    /// Returns the current signed pre-key.
     pub fn spk(&self) -> &SignedPreKey {
         self.spk_store.get_current()
     }
 
-    /// Returns the identity-key.
+    /// Returns the identity key.
     pub fn ik(&self) -> &IdentityKey {
         &self.ik
     }
@@ -97,31 +100,31 @@ impl Account {
         &self.config
     }
 
-    /// Initiates a new session with another user (Bob).
+    /// Initiates a new session with another user.
     ///
-    /// This implements the initiator's (Alice's) side of the X3DH protocol,
-    /// using the pre-key bundle retrieved from the other user (Bob).
+    /// Implements the initiator's (Alice's) side of the X3DH protocol using 
+    /// the other user's pre-key bundle.
     pub fn create_outbound_session(
         &mut self,
-        bob_prekey_bundle: &X3DHPublicKeys,
+        bob_x3dh_public_keys: &X3DHPublicKeys,
     ) -> Result<String, Error> {
         let x3dh_result = X3DH::new(&self.config.protocol_info)
-            .initiate_for_alice(&self.ik, bob_prekey_bundle)?;
+            .initiate_for_alice(&self.ik, bob_x3dh_public_keys)?;
 
         let session_id =
-            self.derive_session_id(&bob_prekey_bundle.ik_public(), &x3dh_result.public_key())?;
+            self.derive_session_id(&bob_x3dh_public_keys.ik_public(), &x3dh_result.public_key())?;
 
         let x3dh_pub_key = x3dh_result.public_key();
         let ratchet = DoubleRatchet::initialize_for_alice(
             x3dh_result.shared_secret(),
-            &bob_prekey_bundle.spk_public().1,
+            &bob_x3dh_public_keys.spk_public().1,
         );
 
         let session = Session::new(
             session_id.clone(),
             ratchet,
-            Some(bob_prekey_bundle.spk_public().0),
-            bob_prekey_bundle.otpk_public().map(|(id, _)| id),
+            Some(bob_x3dh_public_keys.spk_public().0),
+            bob_x3dh_public_keys.otpk_public().map(|(id, _)| id),
             Some(x3dh_pub_key),
         );
 
@@ -130,11 +133,10 @@ impl Account {
         Ok(session_id)
     }
 
-    /// Processes an incoming session initiation from another user (Alice).
+    /// Processes an incoming session initiation from another user.
     ///
-    /// This implements the responder's (Bob's) side of the X3DH protocol,
-    /// using the identity key, ephemeral key, and pre-key IDs from the
-    /// initiator (Alice).
+    /// Implements the responder's (Bob's) side of the X3DH protocol using 
+    /// the initiator's identity and ephemeral keys.
     pub fn create_inbound_session(
         &mut self,
         alice_ik_public: &X25519PublicKey,
@@ -185,7 +187,7 @@ impl Account {
         self.sessions.get_mut(session_id)
     }
 
-    /// Periodically rotate the signed pre-key
+    /// Rotates the signed pre-key if the rotation interval has passed.
     pub fn rotate_spk(&mut self) -> Result<Option<(u32, X25519PublicKey, Signature)>, Error> {
         let now = SystemTime::now();
         if now
@@ -202,16 +204,15 @@ impl Account {
         }
     }
 
-    /// Replenish one-time pre-keys
+    /// Replenishes one-time pre-keys to maintain the desired pool size.
     pub fn replenish_otpks(&mut self) -> Result<HashMap<u32, X25519PublicKey>, Error> {
         self.otpk_store.replenish()
     }
 
-    /// Derive a unique session ID from identities
+    /// Derives a unique session ID from identity and ephemeral keys.
     ///
-    /// A session ID is the SHA256 of the concatenation of three SessionKeys,
-    /// the account’s identity key, the ephemeral base key and the one-time key which
-    /// is used to establish the session.
+    /// Uses SHA256 hash of the identity keys, ephemeral key, and additional 
+    /// randomness to prevent collisions.
     fn derive_session_id(
         &self,
         their_dh_public: &X25519PublicKey,

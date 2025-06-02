@@ -4,31 +4,30 @@ use std::time::SystemTime;
 
 /// A secure messaging session between two parties.
 ///
-/// A Session represents an established secure communication channel between
-/// two parties using the Signal Protocol. It encapsulates a Double Ratchet
-/// instance along with metadata about the session.
+/// Represents an established secure communication channel using the Signal Protocol.
+/// Encapsulates a Double Ratchet instance along with metadata about the session.
 ///
 /// Sessions are typically created after a successful X3DH key agreement and
 /// are used to encrypt and decrypt messages between the two parties.
 pub struct Session {
-    /// TODO: Add documentation here
+    /// Unique identifier for this session.
     pub session_id: String,
     pub(crate) ratchet: DoubleRatchet,
-    /// TODO: Add documentation here
+    /// When this session was created.
     pub created_at: SystemTime,
-    /// TODO: Add documentation here
+    /// When this session was last used for encryption or decryption.
     pub last_used_at: SystemTime,
-    /// TODO: Add documentation here
+    /// ID of the signed pre-key used in X3DH key agreement.
     pub x3dh_spk_id: Option<u32>,
-    /// TODO: Add documentation here
+    /// ID of the one-time pre-key used in X3DH key agreement.
     pub x3dh_otpk_id: Option<u32>,
-    /// TODO: Add documentation here
+    /// Ephemeral public key from X3DH key agreement.
     pub x3dh_ephemeral_key_public: Option<X25519PublicKey>,
 }
 
 impl Session {
     /// Creates a new session with the given parameters.
-    pub fn new(
+    pub(crate) fn new(
         session_id: String,
         ratchet: DoubleRatchet,
         x3dh_spk_id: Option<u32>,

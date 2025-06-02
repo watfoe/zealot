@@ -203,10 +203,6 @@
 //! - **Secure Storage**: Protection of private keys and session state
 //! - **Metadata Protection**: Encrypting or minimizing metadata
 //! - **Perfect Forward Secrecy**: Regular key rotation
-//! - **Secure Random Number Generation**: Using a cryptographically secure RNG
-//!
-//! The security of the application depends not only on the cryptographic protocols
-//! but also on the security of the surrounding infrastructure.
 
 mod types;
 pub use types::*;

@@ -166,7 +166,7 @@ impl Account {
 }
 
 impl Session {
-    pub fn serialize(self) -> Result<SessionProto, Error> {
+    fn serialize(self) -> Result<SessionProto, Error> {
         let created_at_secs = self
             .created_at
             .duration_since(UNIX_EPOCH)
@@ -192,7 +192,7 @@ impl Session {
         })
     }
 
-    pub fn deserialize(proto: SessionProto) -> Result<Self, Error> {
+    fn deserialize(proto: SessionProto) -> Result<Self, Error> {
         let ratchet = if let Some(ratchet_proto) = proto.ratchet {
             deserialize_ratchet(ratchet_proto)?
         } else {

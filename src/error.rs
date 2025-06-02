@@ -1,31 +1,31 @@
-/// TODO: Add documentation here
+/// Errors that can occur during Signal Protocol operations.
 #[derive(thiserror::Error, Debug, Clone, Eq, PartialEq)]
 pub enum Error {
-    /// TODO: Add documentation here
+    /// A cryptographic operation failed.
     #[error("Cryptographic operation failed: {0}")]
     Crypto(String),
 
-    /// TODO: Add documentation here
+    /// A protocol rule was violated.
     #[error("Protocol Violation: {0}")]
     Protocol(String),
 
-    /// TODO: Add documentation here
+    /// Session is in an invalid state.
     #[error("Session state error")]
     Session,
 
-    /// TODO: Add documentation here
+    /// Identity key operation failed.
     #[error("Identity key error")]
     Identity(String),
 
-    /// TODO: Add documentation here
+    /// Pre-key operation failed.
     #[error("Pre-key error")]
     PreKey(String),
 
-    /// TODO: Add documentation here
+    /// Random number generation failed.
     #[error("Random number generation failed")]
     Random,
 
-    /// TODO: Add documentation here
+    /// Serialization or deserialization failed.
     #[error("Serialization/deserialization failed: {0}")]
     Serde(String),
 }

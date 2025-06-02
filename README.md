@@ -184,14 +184,3 @@ This implementation follows the Signal Protocol specifications:
 
 - [X3DH Key Agreement Protocol](https://signal.org/docs/specifications/x3dh/)
 - [Double Ratchet Algorithm](https://signal.org/docs/specifications/doubleratchet/)
-
-## Security Considerations
-
-While this library implements the cryptographic protocols correctly, secure
-messaging applications should also consider:
-
-- **Key Verification**: Out-of-band verification of identity keys
-- **Perfect Forward Secrecy**: Regular key rotation
-
-The security of the application depends not only on the cryptographic protocols
-but also on the security of the surrounding infrastructure.

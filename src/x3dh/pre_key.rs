@@ -6,18 +6,17 @@ use x25519_dalek::SharedSecret;
 
 /// A medium-term signed pre-key as defined in Signal's X3DH protocol.
 ///
-/// In X3DH, signed pre-keys (SPK) are medium-term keys that are signed with
-/// the user's identity key to provide authentication. They are typically
-/// rotated periodically (e.g., weekly or monthly).
+/// Signed pre-keys are medium-term keys that are signed with the user's 
+/// identity key to provide authentication. They are typically rotated 
+/// periodically (e.g., weekly or monthly).
 pub struct SignedPreKey {
     pre_key: X25519Secret,
-    id: u32, // for referencing this pre-key
+    id: u32,
 }
 
 impl SignedPreKey {
     /// Creates a new signed pre-key with the given ID.
     pub fn new(id: u32) -> Result<Self, Error> {
-        // TODO: Shouldn't unwrap
         let seed = generate_random_seed().map_err(|_| Error::Random)?;
 
         Ok(Self {
@@ -41,25 +40,25 @@ impl SignedPreKey {
         self.id
     }
 
-    /// Performs a Diffie-Hellman key agreement with the other party's public key.
+    /// Performs Diffie-Hellman key agreement with the other party's public key.
     pub fn dh(&self, public_key: &X25519PublicKey) -> SharedSecret {
         self.pre_key.dh(public_key)
     }
 
     /// Generates a signature for this pre-key using the provided identity key.
     ///
-    /// The signature proves that the signed pre-key belongs to the
-    /// owner of the identity key, providing authentication.
+    /// The signature proves that the signed pre-key belongs to the owner of 
+    /// the identity key, providing authentication.
     pub fn signature(&self, identity_key: &IdentityKey) -> Signature {
         let encoded = self.public_key().to_bytes();
         identity_key.sign(&encoded)
     }
 
-    /// Serializes the signed pre-key to a 36-byte array for storage.
+    /// Serializes the signed pre-key to a 36-byte array.
     ///
     /// The format is:
     /// - 4 bytes: ID (big-endian u32)
-    /// - 32 bytes: X25519 key
+    /// - 32 bytes: X25519 private key
     pub fn to_bytes(&self) -> [u8; 36] {
         let mut result = [0u8; 36];
 
@@ -76,13 +75,11 @@ impl SignedPreKey {
 impl From<[u8; 36]> for SignedPreKey {
     /// Deserializes a signed pre-key from a 36-byte array.
     fn from(bytes: [u8; 36]) -> Self {
-        // Extract the ID
         let mut id_bytes = [0u8; 4];
         id_bytes.copy_from_slice(&bytes[0..4]);
         let id = u32::from_be_bytes(id_bytes);
-
-        // Extract the key
-        let mut key_bytes = [0u8; 32];
+        
+        let mut key_bytes = Box::new([0u8; 32]);
         key_bytes.copy_from_slice(&bytes[4..]);
 
         Self {
@@ -92,7 +89,7 @@ impl From<[u8; 36]> for SignedPreKey {
     }
 }
 
-/// TODO: Add documentation here
+/// Storage for signed pre-keys with automatic rotation and ID management.
 pub struct SignedPreKeyStore {
     pub(crate) keys: HashMap<u32, SignedPreKey>,
     pub(crate) next_id: u32,
@@ -111,7 +108,7 @@ impl SignedPreKeyStore {
             max_keys,
         })
     }
-
+    
     pub(crate) fn renew_key(&mut self) -> Result<(u32, &SignedPreKey), Error> {
         let id = self.next_id;
         self.next_id += 1;
@@ -119,11 +116,12 @@ impl SignedPreKeyStore {
 
         Ok((id, self.get_current()))
     }
-
+    
     pub(crate) fn get(&self, id: u32) -> Option<&SignedPreKey> {
         self.keys.get(&id)
     }
 
+    /// Returns the most recently created signed pre-key.
     pub(crate) fn get_current(&self) -> &SignedPreKey {
         let current_id = self.next_id - 1;
         self.keys.get(&current_id).unwrap()

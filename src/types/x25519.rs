@@ -1,17 +1,17 @@
 use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-/// TODO: Add documentation here
+/// A public key for X25519 elliptic curve Diffie-Hellman key exchange.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct X25519PublicKey(PublicKey);
 
 impl X25519PublicKey {
-    /// TODO: Add documentation here
+    /// Returns the public key as a byte array reference.
     pub fn as_bytes(&self) -> &[u8; 32] {
         self.0.as_bytes()
     }
 
-    /// TODO: Add documentation here
+    /// Returns the public key as an owned byte array.
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
     }

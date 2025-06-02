@@ -6,7 +6,7 @@ use crate::X3DHSharedSecret;
 use crate::error::Error;
 use crate::generate_random_seed;
 pub(crate) use crate::ratchet::chain::Chain;
-pub use crate::ratchet::message::{MessageHeader, RatchetMessage};
+pub use crate::ratchet::message::RatchetMessage;
 pub(crate) use crate::ratchet::state::RatchetState;
 use crate::{X25519PublicKey, X25519Secret};
 use aes_gcm_siv::aead::Aead;
@@ -18,6 +18,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use x25519_dalek::SharedSecret;
 use zeroize::{Zeroize, ZeroizeOnDrop};
+use crate::ratchet::message::MessageHeader;
 
 const NONCE_SIZE: usize = 12; // AES-GCM uses 12-byte (96-bit) nonces
 

@@ -4,9 +4,9 @@ use x25519_dalek::SharedSecret;
 
 /// A one-time pre-key as defined in Signal's X3DH protocol.
 ///
-/// One-time pre-keys (OPK) provide additional security by ensuring
-/// forward secrecy even if the signed pre-key is compromised. Each key should
-/// be used at most once and then discarded.
+/// One-time pre-keys provide additional security by ensuring forward secrecy 
+/// even if the signed pre-key is compromised. Each key should be used at most 
+/// once and then discarded.
 #[derive(Clone)]
 pub struct OneTimePreKey {
     pre_key: X25519Secret,
@@ -46,7 +46,10 @@ impl OneTimePreKey {
         self.used = true;
     }
 
-    /// Performs a Diffie-Hellman key agreement with the provided public key.
+    /// Performs Diffie-Hellman key agreement with the provided public key.
+    ///
+    /// This consumes the pre-key to prevent reuse. Returns an error if the
+    /// pre-key has already been used.
     pub fn dh(self, public_key: &X25519PublicKey) -> Result<SharedSecret, Error> {
         if self.used {
             return Err(Error::PreKey("Pre-key already used".to_string()));
@@ -55,22 +58,17 @@ impl OneTimePreKey {
         Ok(self.pre_key.dh(public_key))
     }
 
-    /// Serializes the one-time pre-key to a 37-byte array for storage.
+    /// Serializes the one-time pre-key to a 37-byte array.
     ///
     /// The format is:
     /// - 4 bytes: ID (big-endian u32)
     /// - 1 byte: Used flag (0 = unused, 1 = used)
-    /// - 32 bytes: X25519 key
+    /// - 32 bytes: X25519 private key
     pub fn to_bytes(&self) -> [u8; 37] {
         let mut result = [0u8; 37];
-
-        // Add the ID (4 bytes)
+        
         result[0..4].copy_from_slice(&self.id.to_be_bytes());
-
-        // Add the used flag (1 byte)
         result[4] = if self.used { 1 } else { 0 };
-
-        // Add the key bytes (32 bytes)
         result[5..].copy_from_slice(self.pre_key.as_bytes());
 
         result
@@ -78,17 +76,14 @@ impl OneTimePreKey {
 }
 
 impl From<[u8; 37]> for OneTimePreKey {
-    /// Deserializes a one-time pre-key from a 45-byte array.
+    /// Deserializes a one-time pre-key from a 37-byte array.
     fn from(bytes: [u8; 37]) -> Self {
         let mut id_bytes = [0u8; 4];
         id_bytes.copy_from_slice(&bytes[0..4]);
         let id = u32::from_be_bytes(id_bytes);
-
-        // Extract the used flag
         let used = bytes[4] != 0;
-
-        // Extract the key
-        let mut key_bytes = [0u8; 32];
+        
+        let mut key_bytes = Box::new([0u8; 32]);
         key_bytes.copy_from_slice(&bytes[5..]);
 
         Self {
@@ -99,6 +94,7 @@ impl From<[u8; 37]> for OneTimePreKey {
     }
 }
 
+/// Storage for one-time pre-keys with automatic ID management.
 pub(crate) struct OneTimePreKeyStore {
     pub(crate) keys: HashMap<u32, OneTimePreKey>,
     pub(crate) next_id: u32,
