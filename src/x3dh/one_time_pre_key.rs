@@ -4,8 +4,8 @@ use x25519_dalek::SharedSecret;
 
 /// A one-time pre-key as defined in Signal's X3DH protocol.
 ///
-/// One-time pre-keys provide additional security by ensuring forward secrecy 
-/// even if the signed pre-key is compromised. Each key should be used at most 
+/// One-time pre-keys provide additional security by ensuring forward secrecy
+/// even if the signed pre-key is compromised. Each key should be used at most
 /// once and then discarded.
 #[derive(Clone)]
 pub struct OneTimePreKey {
@@ -66,7 +66,7 @@ impl OneTimePreKey {
     /// - 32 bytes: X25519 private key
     pub fn to_bytes(&self) -> [u8; 37] {
         let mut result = [0u8; 37];
-        
+
         result[0..4].copy_from_slice(&self.id.to_be_bytes());
         result[4] = if self.used { 1 } else { 0 };
         result[5..].copy_from_slice(self.pre_key.as_bytes());
@@ -82,7 +82,7 @@ impl From<[u8; 37]> for OneTimePreKey {
         id_bytes.copy_from_slice(&bytes[0..4]);
         let id = u32::from_be_bytes(id_bytes);
         let used = bytes[4] != 0;
-        
+
         let mut key_bytes = Box::new([0u8; 32]);
         key_bytes.copy_from_slice(&bytes[5..]);
 
@@ -121,7 +121,7 @@ impl OneTimePreKeyStore {
             let id = self.next_id;
             let key = OneTimePreKey::new(id)?;
             let key_public = key.public_key();
-            self.next_id += 1;
+            self.next_id = self.next_id.wrapping_add(1);
             self.keys.insert(id, key);
             keys.insert(id, key_public);
         }

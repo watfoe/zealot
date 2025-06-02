@@ -38,7 +38,7 @@ pub struct AccountPreKeyBundle {
 
 /// A user account in the Signal Protocol ecosystem.
 ///
-/// Manages identity keys, pre-keys, and established sessions. Provides methods 
+/// Manages identity keys, pre-keys, and established sessions. Provides methods
 /// for creating and managing secure communication sessions with other users.
 pub struct Account {
     pub(crate) ik: IdentityKey,
@@ -102,7 +102,7 @@ impl Account {
 
     /// Initiates a new session with another user.
     ///
-    /// Implements the initiator's (Alice's) side of the X3DH protocol using 
+    /// Implements the initiator's (Alice's) side of the X3DH protocol using
     /// the other user's pre-key bundle.
     pub fn create_outbound_session(
         &mut self,
@@ -135,7 +135,7 @@ impl Account {
 
     /// Processes an incoming session initiation from another user.
     ///
-    /// Implements the responder's (Bob's) side of the X3DH protocol using 
+    /// Implements the responder's (Bob's) side of the X3DH protocol using
     /// the initiator's identity and ephemeral keys.
     pub fn create_inbound_session(
         &mut self,
@@ -211,7 +211,7 @@ impl Account {
 
     /// Derives a unique session ID from identity and ephemeral keys.
     ///
-    /// Uses SHA256 hash of the identity keys, ephemeral key, and additional 
+    /// Uses SHA256 hash of the identity keys, ephemeral key, and additional
     /// randomness to prevent collisions.
     fn derive_session_id(
         &self,

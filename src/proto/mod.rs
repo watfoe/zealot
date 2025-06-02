@@ -229,11 +229,11 @@ fn serialize_ratchet(ratchet: DoubleRatchet) -> Result<RatchetProto, Error> {
         root_key: ratchet.state.root_key.to_vec(),
         sending_chain: Some(ChainProto {
             chain_key: ratchet.state.sending_chain.chain_key.to_vec(),
-            index: ratchet.state.sending_chain.get_index(),
+            index: ratchet.state.sending_chain.index,
         }),
         receiving_chain: Some(ChainProto {
             chain_key: ratchet.state.receiving_chain.chain_key.to_vec(),
-            index: ratchet.state.receiving_chain.get_index(),
+            index: ratchet.state.receiving_chain.index,
         }),
         previous_sending_chain_length: ratchet.state.previous_sending_chain_length,
         sending_message_number: ratchet.state.sending_message_number,

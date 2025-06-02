@@ -6,6 +6,7 @@ use crate::X3DHSharedSecret;
 use crate::error::Error;
 use crate::generate_random_seed;
 pub(crate) use crate::ratchet::chain::Chain;
+use crate::ratchet::message::MessageHeader;
 pub use crate::ratchet::message::RatchetMessage;
 pub(crate) use crate::ratchet::state::RatchetState;
 use crate::{X25519PublicKey, X25519Secret};
@@ -18,7 +19,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use x25519_dalek::SharedSecret;
 use zeroize::{Zeroize, ZeroizeOnDrop};
-use crate::ratchet::message::MessageHeader;
 
 const NONCE_SIZE: usize = 12; // AES-GCM uses 12-byte (96-bit) nonces
 
@@ -220,7 +220,7 @@ impl DoubleRatchet {
             Self::encrypt_message(&message_key, plaintext, buffer)
         })?;
 
-        self.state.sending_message_number += 1;
+        self.state.sending_message_number = self.state.sending_message_number.wrapping_add(1);
 
         Ok(RatchetMessage {
             header: encrypted_header,
@@ -315,7 +315,7 @@ impl DoubleRatchet {
             err
         })?;
 
-        self.state.receiving_message_number += 1;
+        self.state.receiving_message_number = self.state.receiving_message_number.wrapping_add(1);
 
         Ok(plaintext)
     }
@@ -398,7 +398,7 @@ impl DoubleRatchet {
 
     /// Performs a Diffie-Hellman ratchet step.
     fn dh_ratchet(&mut self, header: &MessageHeader) -> Result<(), Error> {
-        self.state.previous_sending_chain_length = self.state.sending_chain.get_index();
+        self.state.previous_sending_chain_length = self.state.sending_chain.index;
 
         // Update remote public key
         self.state.remote_dh_key_public = Some(header.public_key);
@@ -452,7 +452,8 @@ impl DoubleRatchet {
                         .insert((rhk, self.state.receiving_message_number), message_key);
                 }
 
-                self.state.receiving_message_number += 1;
+                self.state.receiving_message_number =
+                    self.state.receiving_message_number.wrapping_add(1);
             }
         }
 

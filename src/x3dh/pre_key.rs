@@ -6,8 +6,8 @@ use x25519_dalek::SharedSecret;
 
 /// A medium-term signed pre-key as defined in Signal's X3DH protocol.
 ///
-/// Signed pre-keys are medium-term keys that are signed with the user's 
-/// identity key to provide authentication. They are typically rotated 
+/// Signed pre-keys are medium-term keys that are signed with the user's
+/// identity key to provide authentication. They are typically rotated
 /// periodically (e.g., weekly or monthly).
 pub struct SignedPreKey {
     pre_key: X25519Secret,
@@ -47,7 +47,7 @@ impl SignedPreKey {
 
     /// Generates a signature for this pre-key using the provided identity key.
     ///
-    /// The signature proves that the signed pre-key belongs to the owner of 
+    /// The signature proves that the signed pre-key belongs to the owner of
     /// the identity key, providing authentication.
     pub fn signature(&self, identity_key: &IdentityKey) -> Signature {
         let encoded = self.public_key().to_bytes();
@@ -78,7 +78,7 @@ impl From<[u8; 36]> for SignedPreKey {
         let mut id_bytes = [0u8; 4];
         id_bytes.copy_from_slice(&bytes[0..4]);
         let id = u32::from_be_bytes(id_bytes);
-        
+
         let mut key_bytes = Box::new([0u8; 32]);
         key_bytes.copy_from_slice(&bytes[4..]);
 
@@ -108,15 +108,15 @@ impl SignedPreKeyStore {
             max_keys,
         })
     }
-    
+
     pub(crate) fn renew_key(&mut self) -> Result<(u32, &SignedPreKey), Error> {
         let id = self.next_id;
-        self.next_id += 1;
+        self.next_id = self.next_id.wrapping_add(1);
         self.keys.insert(id, SignedPreKey::new(id)?);
 
         Ok((id, self.get_current()))
     }
-    
+
     pub(crate) fn get(&self, id: u32) -> Option<&SignedPreKey> {
         self.keys.get(&id)
     }

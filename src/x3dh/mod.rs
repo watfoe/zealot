@@ -46,7 +46,7 @@ impl X3DHInitializationResult {
 
 /// A bundle of public keys used for X3DH key agreement.
 ///
-/// Contains all the public key material needed by another user to establish 
+/// Contains all the public key material needed by another user to establish
 /// a secure session asynchronously using the X3DH protocol:
 /// - Identity key for authentication and key agreement
 /// - Signed pre-key with signature for authenticated key agreement
@@ -78,7 +78,7 @@ impl X3DHPublicKeys {
 
     /// Verifies the bundle's signature to ensure authenticity.
     ///
-    /// This verification confirms that the signed pre-key was actually created 
+    /// This verification confirms that the signed pre-key was actually created
     /// by the owner of the identity key.
     pub fn verify(&self) -> Result<(), Error> {
         let encoded_key = self.spk_public.1.to_bytes();
@@ -190,7 +190,7 @@ impl X3DH {
 
     /// Processes an initiation message from the initiator (Alice).
     ///
-    /// This implements Bob's side of the X3DH protocol by performing the same 
+    /// This implements Bob's side of the X3DH protocol by performing the same
     /// DH computations as Alice and deriving the same shared secret.
     pub fn initiate_for_bob(
         &self,
