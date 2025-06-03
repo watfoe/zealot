@@ -12,7 +12,7 @@ include!(concat!(env!("OUT_DIR"), "/zealot.rs"));
 
 impl Account {
     /// Serialize the account to Protocol Buffers format
-    pub fn serialize(self) -> Result<Vec<u8>, Error> {
+    pub fn serialize(&self) -> Result<Vec<u8>, Error> {
         let ik_bytes = self.ik().to_bytes();
         let spk_rotation_secs = self
             .spk_last_rotation
@@ -52,7 +52,7 @@ impl Account {
         };
 
         let mut sessions = HashMap::new();
-        for (id, session) in self.sessions {
+        for (id, session) in &self.sessions {
             sessions.insert(id.clone(), session.serialize()?);
         }
 
@@ -166,7 +166,7 @@ impl Account {
 }
 
 impl Session {
-    fn serialize(self) -> Result<SessionProto, Error> {
+    fn serialize(&self) -> Result<SessionProto, Error> {
         let created_at_secs = self
             .created_at
             .duration_since(UNIX_EPOCH)
@@ -181,7 +181,7 @@ impl Session {
 
         Ok(SessionProto {
             session_id: self.session_id.clone(),
-            ratchet: Some(serialize_ratchet(self.ratchet)?),
+            ratchet: Some(serialize_ratchet(&self.ratchet)?),
             created_at: created_at_secs,
             last_used_at: last_used_at_secs,
             x3dh_spk_id: self.x3dh_spk_id,
@@ -218,7 +218,7 @@ impl Session {
     }
 }
 
-fn serialize_ratchet(ratchet: DoubleRatchet) -> Result<RatchetProto, Error> {
+fn serialize_ratchet(ratchet: &DoubleRatchet) -> Result<RatchetProto, Error> {
     let dh_pair_bytes = ratchet.state.dh_pair.to_bytes().to_vec();
 
     let state_proto = RatchetStateProto {
@@ -238,16 +238,16 @@ fn serialize_ratchet(ratchet: DoubleRatchet) -> Result<RatchetProto, Error> {
         previous_sending_chain_length: ratchet.state.previous_sending_chain_length,
         sending_message_number: ratchet.state.sending_message_number,
         receiving_message_number: ratchet.state.receiving_message_number,
-        sending_header_key: match ratchet.state.sending_header_key {
+        sending_header_key: match &ratchet.state.sending_header_key {
             Some(key) => key.to_vec(),
             None => Vec::new(),
         },
-        receiving_header_key: match ratchet.state.receiving_header_key {
+        receiving_header_key: match &ratchet.state.receiving_header_key {
             Some(key) => key.to_vec(),
             None => Vec::new(),
         },
         next_sending_header_key: ratchet.state.next_sending_header_key.to_vec(),
-        next_receiving_header_key: match ratchet.state.next_receiving_header_key {
+        next_receiving_header_key: match &ratchet.state.next_receiving_header_key {
             Some(key) => key.to_vec(),
             None => Vec::new(),
         },
