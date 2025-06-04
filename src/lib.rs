@@ -53,7 +53,7 @@
 //!     .expect("Failed to create session");
 //!
 //! // Bob processes Alice's session initiation
-//! let outbound_x3dh_keys = alice_session.x3dh_keys.as_ref().unwrap();
+//! let outbound_x3dh_keys = alice_session.x3dh_keys().unwrap();
 //! let mut bob_session = bob.create_inbound_session(
 //!     &alice.ik_public(),
 //!     &outbound_x3dh_keys

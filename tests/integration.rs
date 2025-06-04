@@ -22,7 +22,7 @@ mod integration_tests {
             .unwrap();
 
         println!("Step 5: Bob creates inbound session from Alice...");
-        let outbound_x3dh_keys = alice_session.x3dh_keys.as_ref().unwrap();
+        let outbound_x3dh_keys = alice_session.x3dh_keys().unwrap();
         let mut bob_session = bob_account
             .create_inbound_session(&alice_account.ik_public(), &outbound_x3dh_keys)
             .unwrap();
@@ -181,12 +181,12 @@ mod integration_tests {
             .unwrap();
 
         println!("Bob and Charlie create inbound sessions...");
-        let alice_bob_x3dh_keys = alice_bob_session.x3dh_keys.as_ref().unwrap();
+        let alice_bob_x3dh_keys = alice_bob_session.x3dh_keys().unwrap();
         let mut bob_session = bob_account
             .create_inbound_session(&alice_account.ik_public(), &alice_bob_x3dh_keys)
             .unwrap();
 
-        let alice_charlie_x3dh_keys = alice_charlie_session.x3dh_keys.as_ref().unwrap();
+        let alice_charlie_x3dh_keys = alice_charlie_session.x3dh_keys().unwrap();
         let mut charlie_session = charlie_account
             .create_inbound_session(&alice_account.ik_public(), &alice_charlie_x3dh_keys)
             .unwrap();
@@ -289,7 +289,7 @@ mod integration_tests {
         let mut alice_session = alice_account
             .create_outbound_session(&bob_x3dh_keys)
             .unwrap();
-        let outbound_x3dh_keys = alice_session.x3dh_keys.as_ref().unwrap();
+        let outbound_x3dh_keys = alice_session.x3dh_keys().unwrap();
         let mut bob_session = bob_account
             .create_inbound_session(&alice_account.ik_public(), &outbound_x3dh_keys)
             .unwrap();
@@ -328,7 +328,7 @@ mod integration_tests {
             .create_outbound_session(&bob_new_x3dh_keys)
             .unwrap();
 
-        let new_outbound_x3dh_keys = alice_new_session.x3dh_keys.as_ref().unwrap();
+        let new_outbound_x3dh_keys = alice_new_session.x3dh_keys().unwrap();
         let mut bob_new_session = bob_new_account
             .create_inbound_session(&alice_account.ik_public(), &new_outbound_x3dh_keys)
             .unwrap();
@@ -392,12 +392,12 @@ mod integration_tests {
         // Create session
         let bob_bundle = bob_account.prekey_bundle();
         let bob_x3dh_keys = X3DHPublicKeys::from(&bob_bundle);
-        let mut alice_session = alice_account
+        let alice_session = alice_account
             .create_outbound_session(&bob_x3dh_keys)
             .unwrap();
 
-        let outbound_x3dh_keys = alice_session.x3dh_keys.as_ref().unwrap();
-        let mut bob_session = bob_account
+        let outbound_x3dh_keys = alice_session.x3dh_keys().unwrap();
+        let bob_session = bob_account
             .create_inbound_session(&alice_account.ik_public(), &outbound_x3dh_keys)
             .unwrap();
 

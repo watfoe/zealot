@@ -13,6 +13,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 ///
 /// This transforms the session into a more compact format for serialization. Subsequent messages
 /// to `Bob` can also then omit this so as to be more compact.
+#[derive(Clone, Copy)]
 pub struct OutboundSessionX3DHKeys {
     /// ID of `Bob's` the signed pre-key used in X3DH key agreement.
     pub spk_id: u32,
@@ -30,11 +31,11 @@ pub struct OutboundSessionX3DHKeys {
 /// Sessions are typically created after a successful X3DH key agreement and
 /// are used to encrypt and decrypt messages between the two parties.
 pub struct Session {
-    /// Unique identifier for this session.
-    pub session_id: String,
+    /// A probabilistically globally unique identifier for this session.
+    pub(crate) session_id: String,
     pub(crate) ratchet: DoubleRatchet,
     /// X3DH Key materials that were used to establish this outbound session by `Alice`.
-    pub x3dh_keys: Option<OutboundSessionX3DHKeys>,
+    pub(crate) x3dh_keys: Option<OutboundSessionX3DHKeys>,
 }
 
 impl Session {
@@ -72,6 +73,16 @@ impl Session {
     /// Marks this session as established end-to-end.
     pub fn mark_as_established(&mut self) {
         self.x3dh_keys = None;
+    }
+
+    /// Returns a probabilistically globally unique identifier for this session.
+    pub fn session_id(&self) -> String {
+        self.session_id.clone()
+    }
+
+    /// Returns X3DH Key materials that were used to establish this outbound session by `Alice`.
+    pub fn x3dh_keys(&self) -> Option<OutboundSessionX3DHKeys> {
+        self.x3dh_keys
     }
 }
 

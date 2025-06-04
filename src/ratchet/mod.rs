@@ -524,7 +524,7 @@ impl DoubleRatchet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{IdentityKey, OneTimePreKey, SignedPreKey, X3DH, X3DHPublicKeys};
+    use crate::SignedPreKey;
 
     fn create_ratchets() -> (DoubleRatchet, DoubleRatchet) {
         let bob_spk = SignedPreKey::new(1).unwrap();
