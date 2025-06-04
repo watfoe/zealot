@@ -13,7 +13,7 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::SystemTime;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// A bundle containing all public keys for an account.
 ///
@@ -31,11 +31,6 @@ pub struct AccountPreKeyBundle {
     pub otpks_public: HashMap<u32, X25519PublicKey>,
 }
 
-// TODO: Design for concurrency
-// --- sessions: Arc<DashMap<String, Mutex<Session>>
-// --- spk_store: Arc<RwLock<SignedPreKeyStore>
-// --- spk_store: Arc<RwLock<SignedPreKeyStore>
-
 /// A user account in the Signal Protocol ecosystem.
 ///
 /// Manages identity keys, pre-keys, and established sessions. Provides methods
@@ -43,7 +38,6 @@ pub struct AccountPreKeyBundle {
 pub struct Account {
     pub(crate) ik: IdentityKey,
     pub(crate) spk_last_rotation: SystemTime,
-    pub(crate) sessions: HashMap<String, Session>,
     pub(crate) spk_store: SignedPreKeyStore,
     pub(crate) otpk_store: OneTimePreKeyStore,
     pub(crate) config: AccountConfig,
@@ -69,35 +63,38 @@ impl Account {
             spk_store,
             spk_last_rotation: now,
             otpk_store,
-            sessions: HashMap::new(),
             config,
         })
     }
 
     /// Returns the complete pre-key bundle for this account.
     pub fn prekey_bundle(&self) -> AccountPreKeyBundle {
+        let ik = &self.ik;
+        let spk = self.spk();
+
         AccountPreKeyBundle {
-            ik_public: self.ik.dh_key_public(),
-            signing_key_public: self.ik.signing_key_public(),
-            spk_public: (self.spk().id(), self.spk().public_key()),
-            signature: self.spk().signature(&self.ik),
+            ik_public: ik.dh_key_public(),
+            signing_key_public: ik.signing_key_public(),
+            spk_public: (spk.id(), spk.public_key()),
+            signature: spk.signature(&ik),
             otpks_public: self.otpk_store.public_keys(),
         }
     }
 
     /// Returns the current signed pre-key.
-    pub fn spk(&self) -> &SignedPreKey {
+    pub(crate) fn spk(&self) -> &SignedPreKey {
         self.spk_store.get_current()
-    }
-
-    /// Returns the identity key.
-    pub fn ik(&self) -> &IdentityKey {
-        &self.ik
     }
 
     /// Returns the configuration for this account.
     pub fn config(&self) -> &AccountConfig {
         &self.config
+    }
+
+    /// Returns the X25519 public key component of this account's identity key.
+    #[inline]
+    pub fn ik_public(&self) -> X25519PublicKey {
+        self.ik.dh_key_public()
     }
 
     /// Initiates a new session with another user.
@@ -107,7 +104,7 @@ impl Account {
     pub fn create_outbound_session(
         &mut self,
         bob_x3dh_public_keys: &X3DHPublicKeys,
-    ) -> Result<String, Error> {
+    ) -> Result<Session, Error> {
         let x3dh_result = X3DH::new(&self.config.protocol_info)
             .initiate_for_alice(&self.ik, bob_x3dh_public_keys)?;
 
@@ -123,14 +120,14 @@ impl Account {
         let session = Session::new(
             session_id.clone(),
             ratchet,
-            Some(bob_x3dh_public_keys.spk_public().0),
-            bob_x3dh_public_keys.otpk_public().map(|(id, _)| id),
-            Some(x3dh_pub_key),
+            Some(OutboundSessionX3DHKeys {
+                spk_id: bob_x3dh_public_keys.spk_public().0,
+                ephemeral_key_public: x3dh_pub_key,
+                otpk_id: bob_x3dh_public_keys.otpk_public().map(|(id, _)| id),
+            }),
         );
 
-        self.sessions.insert(session_id.clone(), session);
-
-        Ok(session_id)
+        Ok(session)
     }
 
     /// Processes an incoming session initiation from another user.
@@ -140,17 +137,15 @@ impl Account {
     pub fn create_inbound_session(
         &mut self,
         alice_ik_public: &X25519PublicKey,
-        alice_ephemeral_key_public: &X25519PublicKey,
-        spk_id: u32,
-        otpk_id: Option<u32>,
-    ) -> Result<String, Error> {
-        let spk = if let Some(spk) = self.spk_store.get(spk_id) {
+        outbound_session_x3dhkeys: &OutboundSessionX3DHKeys,
+    ) -> Result<Session, Error> {
+        let spk = if let Some(spk) = self.spk_store.get(outbound_session_x3dhkeys.spk_id) {
             spk
         } else {
             return Err(Error::PreKey("Invalid signed pre-key ID".to_string()));
         };
 
-        let otpk = if let Some(id) = otpk_id {
+        let otpk = if let Some(id) = outbound_session_x3dhkeys.otpk_id {
             Some(
                 self.otpk_store
                     .take(id)
@@ -165,26 +160,17 @@ impl Account {
             spk,
             otpk,
             alice_ik_public,
-            alice_ephemeral_key_public,
+            &outbound_session_x3dhkeys.ephemeral_key_public,
         )?;
 
         let ratchet = DoubleRatchet::initialize_for_bob(shared_secret, self.spk().key_pair());
-        let session_id = self.derive_session_id(alice_ik_public, alice_ephemeral_key_public)?;
-        let session = Session::new(session_id.clone(), ratchet, None, None, None);
+        let session_id = self.derive_session_id(
+            alice_ik_public,
+            &outbound_session_x3dhkeys.ephemeral_key_public,
+        )?;
+        let session = Session::new(session_id.clone(), ratchet, None);
 
-        self.sessions.insert(session_id.clone(), session);
-
-        Ok(session_id)
-    }
-
-    /// Returns a reference to a session by its ID.
-    pub fn session(&self, session_id: &str) -> Option<&Session> {
-        self.sessions.get(session_id)
-    }
-
-    /// Returns a mutable reference to a session by its ID.
-    pub fn session_mut(&mut self, session_id: &str) -> Option<&mut Session> {
-        self.sessions.get_mut(session_id)
+        Ok(session)
     }
 
     /// Rotates the signed pre-key if the rotation interval has passed.
@@ -248,6 +234,16 @@ impl From<&AccountPreKeyBundle> for X3DHPublicKeys {
         }
     }
 }
+
+impl Zeroize for Account {
+    fn zeroize(&mut self) {
+        self.ik.zeroize();
+        self.spk_store.zeroize();
+        self.otpk_store.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for Account {}
 
 #[cfg(test)]
 mod tests {

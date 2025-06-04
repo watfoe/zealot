@@ -681,60 +681,6 @@ mod tests {
     }
 
     #[test]
-    fn test_with_x3dh() {
-        // 1. Set up identities and prekeys
-        let alice_identity = IdentityKey::new().unwrap();
-        let bob_identity = IdentityKey::new().unwrap();
-        let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
-        let bob_one_time_pre_key = OneTimePreKey::new(1).unwrap();
-
-        // 2. Create Bob's bundle
-        let bob_bundle = X3DHPublicKeys::new(
-            &bob_identity,
-            &bob_signed_pre_key,
-            Some(&bob_one_time_pre_key),
-        );
-
-        // 3. Alice performs X3DH with Bob's bundle
-        let x3dh = X3DH::new(b"Test-Signal-Protocol");
-        let alice_x3dh_result = x3dh
-            .initiate_for_alice(&alice_identity, &bob_bundle)
-            .unwrap();
-        let alice_public_key = alice_x3dh_result.public_key();
-        // 4. Alice initializes her Double Ratchet with the shared secret
-        let mut alice_ratchet = DoubleRatchet::initialize_for_alice(
-            alice_x3dh_result.shared_secret(),
-            &bob_bundle.spk_public().1,
-        );
-        // 5. Bob processes Alice's initiation
-        let bob_shared_secret = x3dh
-            .initiate_for_bob(
-                &bob_identity,
-                &bob_signed_pre_key,
-                Some(bob_one_time_pre_key),
-                &alice_identity.dh_key_public(),
-                &alice_public_key,
-            )
-            .unwrap();
-        // 6. Bob initializes his Double Ratchet with the shared secret
-        let mut bob_ratchet =
-            DoubleRatchet::initialize_for_bob(bob_shared_secret, bob_signed_pre_key.key_pair());
-        // 7. Test message exchange
-        let message = "This is a secure message using X3DH + Double Ratchet!";
-        let encrypted = alice_ratchet.encrypt(message.as_bytes(), b"AD").unwrap();
-        let decrypted = bob_ratchet.decrypt(&encrypted, b"AD").unwrap();
-
-        assert_eq!(String::from_utf8(decrypted).unwrap(), message);
-
-        // 8. Test reply
-        let reply = "Received your message securely!";
-        let encrypted_reply = bob_ratchet.encrypt(reply.as_bytes(), b"AD").unwrap();
-        let decrypted_reply = alice_ratchet.decrypt(&encrypted_reply, b"AD").unwrap();
-
-        assert_eq!(String::from_utf8(decrypted_reply).unwrap(), reply);
-    }
-
-    #[test]
     fn test_large_message() {
         let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
 

@@ -1,7 +1,7 @@
 syntax = "proto3";
 package zealot;
 
-message X3DHPublicKeysProto {
+message X3dhPublicKeysProto {
     bytes ik_public = 1;
     bytes signing_key_public = 2;
     uint32 spk_id = 3;
@@ -12,13 +12,12 @@ message X3DHPublicKeysProto {
 }
 
 message AccountProto {
-    bytes ik = 1;
-    SignedPreKeyStoreProto spk_store = 2;
-    uint64 spk_last_rotation = 3;
-    OneTimePreKeyStoreProto otpk_store = 4;
-    map<string, SessionProto> sessions = 5;
+    uint32 version = 1;
+    bytes ik = 2;
+    SignedPreKeyStoreProto spk_store = 3;
+    uint64 spk_last_rotation = 4;
+    OneTimePreKeyStoreProto otpk_store = 5;
     AccountConfigProto config = 6;
-    uint32 version = 7;
 }
 
 message OneTimePreKeyStoreProto {
@@ -42,14 +41,16 @@ message AccountConfigProto {
     bytes protocol_info = 6;
 }
 
+message OutboundSessionX3dhKeysProto {
+    uint32 spk_id = 1;
+    optional uint32 otpk_id = 2;
+    bytes ephemeral_key_public = 3;
+}
+
 message SessionProto {
     string session_id = 1;
     RatchetProto ratchet = 2;
-    uint64 created_at = 3;
-    uint64 last_used_at = 4;
-    optional uint32 x3dh_spk_id = 5;
-    optional uint32 x3dh_otpk_id = 6;
-    optional bytes x3dh_ephemeral_key_public = 7;
+    optional OutboundSessionX3dhKeysProto x3dh_keys = 3;
 }
 
 message RatchetProto {

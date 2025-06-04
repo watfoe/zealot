@@ -3,6 +3,7 @@ use crate::{X25519PublicKey, X25519Secret};
 use ed25519_dalek::Signature;
 use std::collections::HashMap;
 use x25519_dalek::SharedSecret;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// A medium-term signed pre-key as defined in Signal's X3DH protocol.
 ///
@@ -62,10 +63,7 @@ impl SignedPreKey {
     pub fn to_bytes(&self) -> [u8; 36] {
         let mut result = [0u8; 36];
 
-        // Add the ID (4 bytes)
         result[0..4].copy_from_slice(&self.id.to_be_bytes());
-
-        // Add the key bytes
         result[4..].copy_from_slice(self.pre_key.as_bytes());
 
         result
@@ -88,6 +86,15 @@ impl From<[u8; 36]> for SignedPreKey {
         }
     }
 }
+
+impl Zeroize for SignedPreKey {
+    fn zeroize(&mut self) {
+        self.pre_key.zeroize();
+        self.id = 0;
+    }
+}
+
+impl ZeroizeOnDrop for SignedPreKey {}
 
 /// Storage for signed pre-keys with automatic rotation and ID management.
 pub struct SignedPreKeyStore {
@@ -127,6 +134,19 @@ impl SignedPreKeyStore {
         self.keys.get(&current_id).unwrap()
     }
 }
+
+impl Zeroize for SignedPreKeyStore {
+    fn zeroize(&mut self) {
+        for (_, key) in self.keys.iter_mut() {
+            key.zeroize();
+        }
+        self.keys.clear();
+        self.next_id = 0;
+        self.max_keys = 0;
+    }
+}
+
+impl ZeroizeOnDrop for SignedPreKeyStore {}
 
 #[cfg(test)]
 mod tests {

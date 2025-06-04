@@ -7,11 +7,13 @@ pub struct X25519PublicKey(PublicKey);
 
 impl X25519PublicKey {
     /// Returns the public key as a byte array reference.
+    #[inline]
     pub fn as_bytes(&self) -> &[u8; 32] {
         self.0.as_bytes()
     }
 
     /// Returns the public key as an owned byte array.
+    #[inline]
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
     }
@@ -39,6 +41,7 @@ impl AsRef<PublicKey> for X25519PublicKey {
 pub struct X25519Secret(Box<StaticSecret>);
 
 impl X25519Secret {
+    #[inline]
     pub(crate) fn dh(&self, public_key: &X25519PublicKey) -> SharedSecret {
         self.0.diffie_hellman(public_key.as_ref())
     }

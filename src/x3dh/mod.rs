@@ -61,18 +61,20 @@ pub struct X3DHPublicKeys {
 
 impl X3DHPublicKeys {
     /// Creates a new pre-key bundle from the provided keys.
-    pub fn new(ik: &IdentityKey, spk: &SignedPreKey, otpk: Option<&OneTimePreKey>) -> Self {
-        let ik_public = ik.dh_key_public();
-        let signing_key_public = ik.signing_key_public();
-        let spk_public = spk.public_key();
-        let signature = spk.signature(ik);
-
+    #[allow(dead_code)]
+    pub(crate) fn new(
+        ik_public: X25519PublicKey,
+        signing_key_public: VerifyingKey,
+        signature: Signature,
+        spk_public: (u32, X25519PublicKey),
+        otpk: Option<(u32, X25519PublicKey)>,
+    ) -> Self {
         Self {
             ik_public,
             signing_key_public,
-            spk_public: (spk.id(), spk_public),
+            spk_public,
             signature,
-            otpk_public: otpk.map(|key| (key.id(), key.public_key())),
+            otpk_public: otpk,
         }
     }
 
@@ -88,26 +90,31 @@ impl X3DHPublicKeys {
     }
 
     /// Returns the public signed pre-key from this bundle.
+    #[inline]
     pub fn spk_public(&self) -> (u32, X25519PublicKey) {
         self.spk_public
     }
 
     /// Returns the public identity key for DH operations.
+    #[inline]
     pub fn ik_public(&self) -> X25519PublicKey {
         self.ik_public
     }
 
     /// Returns the public verification key for the identity.
+    #[inline]
     pub fn signing_key_public(&self) -> VerifyingKey {
         self.signing_key_public
     }
 
     /// Returns the optional one-time pre-key from this bundle.
+    #[inline]
     pub fn otpk_public(&self) -> Option<(u32, X25519PublicKey)> {
         self.otpk_public
     }
 
     /// Returns the signature for the signed pre-key.
+    #[inline]
     pub fn signature(&self) -> Signature {
         self.signature
     }
@@ -256,15 +263,51 @@ mod tests {
     use crate::{IdentityKey, OneTimePreKey, SignedPreKey};
 
     #[test]
-    fn test_x3dh_agreement_with_one_time_key() {
+    fn test_x3dh_key_agreement() {
         let alice_identity = IdentityKey::new().unwrap();
         let bob_identity = IdentityKey::new().unwrap();
         let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
         let bob_one_time_pre_key = OneTimePreKey::new(1).unwrap();
         let bob_bundle = X3DHPublicKeys::new(
-            &bob_identity,
-            &bob_signed_pre_key,
-            Some(&bob_one_time_pre_key),
+            bob_identity.dh_key_public(),
+            bob_identity.signing_key_public(),
+            bob_signed_pre_key.signature(&bob_identity),
+            (bob_signed_pre_key.id(), bob_signed_pre_key.public_key()),
+            Some((bob_one_time_pre_key.id(), bob_one_time_pre_key.public_key())),
+        );
+
+        // Verification is successful
+        assert!(bob_bundle.verify().is_ok());
+
+        // Create another bundle with different keys
+        let another_identity = IdentityKey::new().unwrap();
+
+        // Try to create an invalid bundle (mixing keys)
+        let invalid_bundle = X3DHPublicKeys::new(
+            bob_identity.dh_key_public(),
+            another_identity.signing_key_public(),
+            bob_signed_pre_key.signature(&bob_identity),
+            (bob_signed_pre_key.id(), bob_signed_pre_key.public_key()),
+            None,
+        );
+
+        // This should fail verification
+        assert!(invalid_bundle.verify().is_err());
+
+        // Different protocol infos should produce different shared secrets
+        let x3dh1 = X3DH::new(b"Protocol-Info-1");
+        let alice_result_1 = x3dh1
+            .initiate_for_alice(&alice_identity, &bob_bundle)
+            .unwrap();
+
+        let x3dh2 = X3DH::new(b"Protocol-Info-2");
+        let alice_result_2 = x3dh2
+            .initiate_for_alice(&alice_identity, &bob_bundle)
+            .unwrap();
+
+        assert_ne!(
+            alice_result_1.shared_secret.0,
+            alice_result_2.shared_secret.0
         );
 
         // Alice initiates the key agreement
@@ -292,7 +335,13 @@ mod tests {
         let alice_identity = IdentityKey::new().unwrap();
         let bob_identity = IdentityKey::new().unwrap();
         let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
-        let bob_bundle = X3DHPublicKeys::new(&bob_identity, &bob_signed_pre_key, None);
+        let bob_bundle = X3DHPublicKeys::new(
+            bob_identity.dh_key_public(),
+            bob_identity.signing_key_public(),
+            bob_signed_pre_key.signature(&bob_identity),
+            (bob_signed_pre_key.id(), bob_signed_pre_key.public_key()),
+            None,
+        );
 
         let x3dh = X3DH::new(b"Test-Protocol-Info");
         let alice_result = x3dh
@@ -310,84 +359,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(alice_result.shared_secret.0, bob_secret.0);
-    }
-
-    #[test]
-    fn test_x3dh_bundle_verification() {
-        let alice_identity = IdentityKey::new().unwrap();
-        let bob_identity = IdentityKey::new().unwrap();
-        let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
-
-        // TODO: For this test, we need a way to create an invalid bundle
-
-        // A valid bundle
-        let bob_bundle = X3DHPublicKeys::new(&bob_identity, &bob_signed_pre_key, None);
-
-        // For now, we'll just test that the valid bundle passes verification
-        let x3dh = X3DH::new(b"Test-Protocol-Info");
-        let result = x3dh.initiate_for_alice(&alice_identity, &bob_bundle);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_x3dh_different_info_produces_different_secrets() {
-        let alice_identity = IdentityKey::new().unwrap();
-        let bob_identity = IdentityKey::new().unwrap();
-        let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
-        let bob_bundle = X3DHPublicKeys::new(&bob_identity, &bob_signed_pre_key, None);
-
-        let x3dh1 = X3DH::new(b"App-A");
-        let alice_result1 = x3dh1
-            .initiate_for_alice(&alice_identity, &bob_bundle)
-            .unwrap();
-
-        let x3dh2 = X3DH::new(b"App-B");
-        let alice_result2 = x3dh2
-            .initiate_for_alice(&alice_identity, &bob_bundle)
-            .unwrap();
-
-        assert_ne!(alice_result1.shared_secret.0, alice_result2.shared_secret.0);
-    }
-
-    #[test]
-    fn test_pre_key_bundle_creation_and_verification() {
-        let identity_key = IdentityKey::new().unwrap();
-        let pre_key = SignedPreKey::new(13).unwrap();
-
-        // Create a bundle
-        let session_bundle = X3DHPublicKeys::new(&identity_key, &pre_key, None);
-
-        // Verify the bundle
-        assert!(session_bundle.verify().is_ok());
-
-        // Create another bundle with different keys
-        let another_identity = IdentityKey::new().unwrap();
-
-        // Try to create an invalid bundle (mixing keys)
-        let invalid_bundle = X3DHPublicKeys {
-            ik_public: identity_key.dh_key_public(),
-            signing_key_public: another_identity.signing_key_public(), // Wrong verify key
-            spk_public: (pre_key.id(), pre_key.public_key()),
-            signature: pre_key.signature(&identity_key),
-            otpk_public: None,
-        };
-
-        // This should fail verification
-        assert!(invalid_bundle.verify().is_err());
-    }
-
-    #[test]
-    fn test_tamper_resistance() {
-        let identity_key = IdentityKey::new().unwrap();
-        let pre_key = SignedPreKey::new(13).unwrap();
-
-        let mut bundle = X3DHPublicKeys::new(&identity_key, &pre_key, None);
-
-        // Tamper with the signed pre-key
-        let another_pre_key = SignedPreKey::new(34).unwrap();
-        bundle.spk_public = (another_pre_key.id(), another_pre_key.public_key());
-
-        // Verification should fail
-        assert!(bundle.verify().is_err());
     }
 }

@@ -1,6 +1,7 @@
 use crate::{Error, X25519PublicKey, X25519Secret, generate_random_seed};
 use std::collections::HashMap;
 use x25519_dalek::SharedSecret;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// A one-time pre-key as defined in Signal's X3DH protocol.
 ///
@@ -94,6 +95,16 @@ impl From<[u8; 37]> for OneTimePreKey {
     }
 }
 
+impl Zeroize for OneTimePreKey {
+    fn zeroize(&mut self) {
+        self.pre_key.zeroize();
+        self.id = 0;
+        self.used = false;
+    }
+}
+
+impl ZeroizeOnDrop for OneTimePreKey {}
+
 /// Storage for one-time pre-keys with automatic ID management.
 pub(crate) struct OneTimePreKeyStore {
     pub(crate) keys: HashMap<u32, OneTimePreKey>,
@@ -155,6 +166,19 @@ impl OneTimePreKeyStore {
         self.generate_keys(needed)
     }
 }
+
+impl Zeroize for OneTimePreKeyStore {
+    fn zeroize(&mut self) {
+        for (_, key) in self.keys.iter_mut() {
+            key.zeroize();
+        }
+        self.keys.clear();
+        self.next_id = 0;
+        self.max_keys = 0;
+    }
+}
+
+impl ZeroizeOnDrop for OneTimePreKeyStore {}
 
 #[cfg(test)]
 mod tests {

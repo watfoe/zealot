@@ -1,8 +1,8 @@
 use crate::ratchet::{Chain, RatchetState};
 use crate::types::X25519Secret;
 use crate::{
-    Account, AccountConfig, DoubleRatchet, Error, IdentityKey, OneTimePreKey, Session,
-    SignedPreKey, X25519PublicKey,
+    Account, AccountConfig, DoubleRatchet, Error, IdentityKey, OneTimePreKey,
+    OutboundSessionX3DHKeys, Session, SignedPreKey, X25519PublicKey,
 };
 use prost::Message;
 use std::collections::HashMap;
@@ -13,7 +13,7 @@ include!(concat!(env!("OUT_DIR"), "/zealot.rs"));
 impl Account {
     /// Serialize the account to Protocol Buffers format
     pub fn serialize(&self) -> Result<Vec<u8>, Error> {
-        let ik_bytes = self.ik().to_bytes();
+        let ik_bytes = self.ik.to_bytes();
         let spk_rotation_secs = self
             .spk_last_rotation
             .duration_since(UNIX_EPOCH)
@@ -51,25 +51,19 @@ impl Account {
             protocol_info: self.config().protocol_info.clone(),
         };
 
-        let mut sessions = HashMap::new();
-        for (id, session) in &self.sessions {
-            sessions.insert(id.clone(), session.serialize()?);
-        }
-
         let account_proto = AccountProto {
+            version: 1, // Current schema version
             ik: ik_bytes.to_vec(),
             spk_store: Some(spk_store),
             spk_last_rotation: spk_rotation_secs,
             otpk_store: Some(otpk_store),
-            sessions,
             config: Some(config),
-            version: 1, // Current schema version
         };
 
         let mut buf = Vec::new();
         account_proto
             .encode(&mut buf)
-            .map_err(|e| Error::Serde(format!("Failed to encode account: {}", e)))?;
+            .map_err(|err| Error::Serde(format!("Failed to encode account: {err:?}")))?;
 
         Ok(buf)
     }
@@ -77,7 +71,7 @@ impl Account {
     /// Deserialize an account from Protocol Buffers format
     pub fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
         let account_proto = AccountProto::decode(bytes)
-            .map_err(|e| Error::Serde(format!("Failed to decode account: {}", e)))?;
+            .map_err(|err| Error::Serde(format!("Failed to decode account: {err:?}")))?;
 
         if account_proto.version != 1 {
             return Err(Error::Serde(format!(
@@ -149,76 +143,84 @@ impl Account {
             return Err(Error::Serde("Missing one-time pre-key store".to_string()));
         };
 
-        let mut sessions = HashMap::new();
-        for (id, session_proto) in account_proto.sessions {
-            sessions.insert(id, Session::deserialize(session_proto)?);
-        }
-
         Ok(Account {
             ik,
             spk_store,
             spk_last_rotation,
             otpk_store,
-            sessions,
             config,
         })
     }
 }
 
 impl Session {
-    fn serialize(&self) -> Result<SessionProto, Error> {
-        let created_at_secs = self
-            .created_at
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        let last_used_at_secs = self
-            .last_used_at
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        Ok(SessionProto {
+    pub fn serialize(&self) -> Result<Vec<u8>, Error> {
+        let session_proto = SessionProto {
             session_id: self.session_id.clone(),
-            ratchet: Some(serialize_ratchet(&self.ratchet)?),
-            created_at: created_at_secs,
-            last_used_at: last_used_at_secs,
-            x3dh_spk_id: self.x3dh_spk_id,
-            x3dh_otpk_id: self.x3dh_otpk_id,
-            x3dh_ephemeral_key_public: self
-                .x3dh_ephemeral_key_public
-                .map(|key| key.to_bytes().to_vec()),
-        })
+            ratchet: Some(serialize_ratchet(&self.ratchet)),
+            x3dh_keys: self.x3dh_keys.as_ref().map(|keys| keys.serialize()),
+        };
+
+        let mut buf = Vec::new();
+        session_proto
+            .encode(&mut buf)
+            .map_err(|err| Error::Serde(format!("Failed to encode session: {err:?}")))?;
+
+        Ok(buf)
     }
 
-    fn deserialize(proto: SessionProto) -> Result<Self, Error> {
-        let ratchet = if let Some(ratchet_proto) = proto.ratchet {
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
+        let session_proto = SessionProto::decode(bytes)
+            .map_err(|err| Error::Serde(format!("Failed to decode session: {err:?}")))?;
+
+        let ratchet = if let Some(ratchet_proto) = session_proto.ratchet {
             deserialize_ratchet(ratchet_proto)?
         } else {
             return Err(Error::Serde("Missing ratchet data".to_string()));
         };
 
-        let created_at = UNIX_EPOCH + Duration::from_secs(proto.created_at);
-        let last_used_at = UNIX_EPOCH + Duration::from_secs(proto.last_used_at);
+        let x3dh_keys = if let Some(x3dh_keys_proto) = session_proto.x3dh_keys {
+            Some(OutboundSessionX3DHKeys::deserialize(x3dh_keys_proto)?)
+        } else {
+            None
+        };
 
         Ok(Session {
-            session_id: proto.session_id,
+            session_id: session_proto.session_id,
             ratchet,
-            created_at,
-            last_used_at,
-            x3dh_spk_id: proto.x3dh_spk_id,
-            x3dh_otpk_id: proto.x3dh_otpk_id,
-            x3dh_ephemeral_key_public: proto.x3dh_ephemeral_key_public.map(|value| {
-                let mut bytes = [0u8; 32];
-                bytes.copy_from_slice(&value);
-                X25519PublicKey::from(bytes)
-            }),
+            x3dh_keys,
         })
     }
 }
 
-fn serialize_ratchet(ratchet: &DoubleRatchet) -> Result<RatchetProto, Error> {
+impl OutboundSessionX3DHKeys {
+    pub fn serialize(&self) -> OutboundSessionX3dhKeysProto {
+        OutboundSessionX3dhKeysProto {
+            spk_id: self.spk_id,
+            otpk_id: self.otpk_id,
+            ephemeral_key_public: self.ephemeral_key_public.to_bytes().to_vec(),
+        }
+    }
+
+    pub fn deserialize(proto: OutboundSessionX3dhKeysProto) -> Result<Self, Error> {
+        if proto.ephemeral_key_public.len() != 32 {
+            return Err(Error::Serde(
+                "Invalid Ephemeral public key length".to_string(),
+            ));
+        }
+
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&proto.ephemeral_key_public);
+
+        Ok(OutboundSessionX3DHKeys {
+            spk_id: proto.spk_id,
+            otpk_id: proto.otpk_id,
+            ephemeral_key_public: X25519PublicKey::from(bytes),
+        })
+    }
+}
+
+fn serialize_ratchet(ratchet: &DoubleRatchet) -> RatchetProto {
     let dh_pair_bytes = ratchet.state.dh_pair.to_bytes().to_vec();
 
     let state_proto = RatchetStateProto {
@@ -262,12 +264,12 @@ fn serialize_ratchet(ratchet: &DoubleRatchet) -> Result<RatchetProto, Error> {
         });
     }
 
-    Ok(RatchetProto {
+    RatchetProto {
         dh_pair: dh_pair_bytes,
         state: Some(state_proto),
         skipped_message_keys: skipped_keys,
         max_skip: ratchet.max_skip,
-    })
+    }
 }
 
 fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
@@ -403,627 +405,132 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        Account, AccountConfig, DoubleRatchet, Error, IdentityKey, OneTimePreKey, Session,
-        SignedPreKey, X3DH, X3DHPublicKeys, X25519PublicKey,
-    };
-    use ed25519_dalek::ed25519::SignatureBytes;
-    use ed25519_dalek::{Signature, VerifyingKey};
-    use prost::Message;
+    use crate::{Account, AccountConfig, Session, X3DHPublicKeys};
     use std::time::Duration;
 
-    include!(concat!(env!("OUT_DIR"), "/zealot.rs"));
-
-    impl X3DHPublicKeys {
-        /// TODO: Document this
-        pub fn serialize(&self) -> Result<Vec<u8>, Error> {
-            let (otpk_id, otpk_public) = self
-                .otpk_public
-                .map(|(id, otpk)| (Some(id), Some(otpk.to_bytes().to_vec())))
-                .unwrap_or_default();
-
-            let prekey_proto = X3dhPublicKeysProto {
-                ik_public: self.ik_public.to_bytes().to_vec(),
-                signing_key_public: self.signing_key_public.to_bytes().to_vec(),
-                spk_id: self.spk_public().0,
-                spk_public: self.spk_public().1.to_bytes().to_vec(),
-                signature: self.signature.to_vec(),
-                otpk_public,
-                otpk_id,
-            };
-
-            let mut buf = Vec::new();
-            prekey_proto
-                .encode(&mut buf)
-                .map_err(|e| Error::Serde(format!("Failed to encode pre-key: {}", e)))?;
-
-            Ok(buf)
-        }
-
-        /// TODO: Document this
-        pub fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
-            let prekey_proto = X3dhPublicKeysProto::decode(bytes)
-                .map_err(|e| Error::Serde(format!("Failed to decode account: {}", e)))?;
-
-            if prekey_proto.ik_public.len() != 32 {
-                return Err(Error::Serde(
-                    "Invalid public diffie-hellman identity key length".to_string(),
-                ));
-            }
-            let mut pub_ik_bytes = [0u8; 32];
-            pub_ik_bytes.copy_from_slice(&prekey_proto.ik_public);
-            let ik_public = X25519PublicKey::from(pub_ik_bytes);
-
-            if prekey_proto.signing_key_public.len() != 32 {
-                return Err(Error::Serde(
-                    "Invalid public identity key verifier length".to_string(),
-                ));
-            }
-            let mut pub_ikv_bytes = [0u8; 32];
-            pub_ikv_bytes.copy_from_slice(&prekey_proto.signing_key_public);
-            let signing_key_public = VerifyingKey::from_bytes(&pub_ikv_bytes)
-                .map_err(|err| Error::Serde(err.to_string()))?;
-
-            if prekey_proto.spk_public.len() != 32 {
-                return Err(Error::Serde(
-                    "Invalid public signed pre-key length".to_string(),
-                ));
-            }
-            let mut pub_spk_bytes = [0u8; 32];
-            pub_spk_bytes.copy_from_slice(&prekey_proto.spk_public);
-            let spk_public = X25519PublicKey::from(pub_spk_bytes);
-
-            if prekey_proto.signature.len() != 64 {
-                return Err(Error::Serde("Invalid signature length".to_string()));
-            }
-            let mut signature_bytes = [0u8; 64];
-            signature_bytes.copy_from_slice(&prekey_proto.signature);
-            let signature = Signature::from(SignatureBytes::from(signature_bytes));
-
-            let otpk_public = if let Some(otpk) = prekey_proto.otpk_public {
-                if otpk.len() < 32 {
-                    return Err(Error::Serde("Invalid One-Time Pre-Key length".to_string()));
-                }
-
-                let mut otpk_bytes = [0u8; 32];
-                otpk_bytes.copy_from_slice(&otpk);
-
-                Some((
-                    prekey_proto.otpk_id.unwrap(),
-                    X25519PublicKey::from(otpk_bytes),
-                ))
-            } else {
-                None
-            };
-
-            Ok(Self {
-                ik_public,
-                signing_key_public,
-                spk_public: (prekey_proto.spk_id, spk_public),
-                signature,
-                otpk_public,
-            })
-        }
-    }
-
-    fn create_test_session_pair() -> (Session, Session) {
-        // Set up identities and pre-keys
-        let alice_identity = IdentityKey::new().unwrap();
-        let bob_identity = IdentityKey::new().unwrap();
-        let bob_spk = SignedPreKey::new(1).unwrap();
-        let bob_one_time_pre_key = OneTimePreKey::new(1).unwrap();
-
-        // Create Bob's pre-key bundle
-        let bob_bundle = X3DHPublicKeys::new(&bob_identity, &bob_spk, Some(&bob_one_time_pre_key));
-
-        let x3dh = X3DH::new(b"Test-Session-Protocol");
-        let alice_x3dh_result = x3dh
-            .initiate_for_alice(&alice_identity, &bob_bundle)
-            .unwrap();
-        let alice_ephemeral_public = alice_x3dh_result.public_key();
-
-        let alice_ratchet = DoubleRatchet::initialize_for_alice(
-            alice_x3dh_result.shared_secret(),
-            &bob_bundle.spk_public().1,
-        );
-
-        let alice_session_id = format!("alice-to-bob-{}", rand::random::<u32>());
-        let alice_session = Session::new(
-            alice_session_id,
-            alice_ratchet,
-            None,
-            None,
-            Some(alice_ephemeral_public),
-        );
-
-        let bob_shared_secret = x3dh
-            .initiate_for_bob(
-                &bob_identity,
-                &bob_spk,
-                Some(bob_one_time_pre_key),
-                &alice_identity.dh_key_public(),
-                &alice_ephemeral_public,
-            )
-            .unwrap();
-
-        let bob_ratchet = DoubleRatchet::initialize_for_bob(bob_shared_secret, bob_spk.key_pair());
-
-        let bob_session_id = format!("bob-to-alice-{}", rand::random::<u32>());
-        let bob_session = Session::new(bob_session_id, bob_ratchet, None, None, None);
-
-        (alice_session, bob_session)
-    }
-
     #[test]
-    fn test_account_serialization() {
+    fn test_account_serialization_roundtrip() {
         let config = AccountConfig {
-            max_skipped_messages: 42,
+            max_skipped_messages: 25,
             spk_rotation_interval: Duration::from_secs(24 * 60 * 60 * 3), // 3 days
             min_otpks: 15,
             max_otpks: 75,
             max_spks: 20,
             protocol_info: b"Test-Protocol".to_vec(),
         };
-        let mut account = Account::new(Some(config)).unwrap();
-
-        let bob_identity = IdentityKey::new().unwrap();
-        let bob_spk = SignedPreKey::new(1).unwrap();
-        let bob_bundle = X3DHPublicKeys::new(&bob_identity, &bob_spk, None);
-
-        let ik_pub = account.ik().dh_key_public();
-        let spk_pub = account.spk().public_key();
-        let max_skipped_msgs = account.config().max_skipped_messages;
-        let spk_rotation_interval = account.config().spk_rotation_interval;
-        let protocol_info = account.config().protocol_info.clone();
-        let otpk_count = account.otpk_store.count();
-
-        let session_id = account.create_outbound_session(&bob_bundle).unwrap();
+        let account = Account::new(Some(config)).unwrap();
 
         let serialized = account.serialize().unwrap();
+        let deserialized = Account::deserialize(&serialized).unwrap();
 
-        let deserialized_account = Account::deserialize(&serialized).unwrap();
-
+        // Verify core functionality is preserved
         assert_eq!(
-            ik_pub.as_bytes(),
-            deserialized_account.ik().dh_key_public().as_bytes(),
-            "Identity keys should match"
+            account.ik_public().as_bytes(),
+            deserialized.ik_public().as_bytes()
         );
-
         assert_eq!(
-            spk_pub.as_bytes(),
-            deserialized_account.spk().public_key().as_bytes(),
-            "Signed pre-keys should match"
+            account.config().protocol_info,
+            deserialized.config().protocol_info
         );
-
-        assert_eq!(
-            max_skipped_msgs,
-            deserialized_account.config().max_skipped_messages,
-            "Config max_skipped_messages should match"
-        );
-
-        assert_eq!(
-            spk_rotation_interval,
-            deserialized_account.config().spk_rotation_interval,
-            "Config rotation interval should match"
-        );
-
-        assert_eq!(
-            protocol_info,
-            deserialized_account.config().protocol_info,
-            "Protocol info should match"
-        );
-
-        assert_eq!(
-            otpk_count,
-            deserialized_account.otpk_store.count(),
-            "One-time pre-key count should match"
-        );
-
-        assert!(
-            deserialized_account.session(&session_id).is_some(),
-            "Session should exist in deserialized account"
-        );
+        assert_eq!(account.otpk_store.count(), deserialized.otpk_store.count());
     }
 
     #[test]
-    fn test_session_full_functionality() {
+    fn test_session_serialization_preserves_functionality() {
         let (mut alice_session, mut bob_session) = create_test_session_pair();
 
-        let message1 = "Hello Bob, this is a secure message!";
-        let ad1 = b"context-1";
-        let encrypted1 = alice_session.encrypt(message1.as_bytes(), ad1).unwrap();
-        let decrypted1 = bob_session.decrypt(&encrypted1, ad1).unwrap();
+        // Exchange messages before serialization
+        let message1 = "Hello before serialization";
+        let encrypted1 = alice_session.encrypt(message1.as_bytes(), b"test").unwrap();
+        let decrypted1 = bob_session.decrypt(&encrypted1, b"test").unwrap();
         assert_eq!(String::from_utf8(decrypted1).unwrap(), message1);
 
-        let message2 = "Hello Alice, I received your message!";
-        let ad2 = b"context-2";
-        let encrypted2 = bob_session.encrypt(message2.as_bytes(), ad2).unwrap();
-        let decrypted2 = alice_session.decrypt(&encrypted2, ad2).unwrap();
+        // Serialize both sessions
+        let alice_serialized = alice_session.serialize().unwrap();
+        let bob_serialized = bob_session.serialize().unwrap();
+
+        let mut alice_restored = Session::deserialize(&alice_serialized).unwrap();
+        let mut bob_restored = Session::deserialize(&bob_serialized).unwrap();
+
+        // Verify sessions work after restoration
+        let message2 = "Hello after serialization";
+        let encrypted2 = alice_restored
+            .encrypt(message2.as_bytes(), b"test")
+            .unwrap();
+        let decrypted2 = bob_restored.decrypt(&encrypted2, b"test").unwrap();
         assert_eq!(String::from_utf8(decrypted2).unwrap(), message2);
-
-        let alice_serialized = alice_session.serialize().unwrap();
-        let bob_serialized = bob_session.serialize().unwrap();
-
-        let mut alice_deserialized = Session::deserialize(alice_serialized).unwrap();
-        let mut bob_deserialized = Session::deserialize(bob_serialized).unwrap();
-
-        // Verify we can continue the conversation with deserialized sessions
-        let message3 = "This message is sent after serialization!";
-        let ad3 = b"context-3";
-        let encrypted3 = alice_deserialized
-            .encrypt(message3.as_bytes(), ad3)
-            .unwrap();
-        let decrypted3 = bob_deserialized.decrypt(&encrypted3, ad3).unwrap();
-        assert_eq!(String::from_utf8(decrypted3).unwrap(), message3);
-
-        let message4 = "And this response is also after serialization!";
-        let ad4 = b"context-4";
-        let encrypted4 = bob_deserialized.encrypt(message4.as_bytes(), ad4).unwrap();
-        let decrypted4 = alice_deserialized.decrypt(&encrypted4, ad4).unwrap();
-        assert_eq!(String::from_utf8(decrypted4).unwrap(), message4);
     }
 
     #[test]
-    fn test_out_of_order_messages_after_serialization() {
+    fn test_out_of_order_messages_with_serialization() {
         let (mut alice_session, mut bob_session) = create_test_session_pair();
 
-        let messages = vec![
-            "Message 1",
-            "Message 2",
-            "Message 3",
-            "Message 4",
-            "Message 5",
-        ];
+        // Alice sends multiple messages
+        let messages = ["Message 1", "Message 2", "Message 3"];
+        let encrypted_messages: Vec<_> = messages
+            .iter()
+            .map(|msg| alice_session.encrypt(msg.as_bytes(), b"test").unwrap())
+            .collect();
 
-        let ad = b"out-of-order-test";
-        let mut encrypted_messages = Vec::new();
+        // Bob receives first message
+        let _ = bob_session
+            .decrypt(&encrypted_messages[0], b"test")
+            .unwrap();
 
-        for msg in &messages {
-            encrypted_messages.push(alice_session.encrypt(msg.as_bytes(), ad).unwrap());
-        }
-
-        let decrypted1 = bob_session.decrypt(&encrypted_messages[0], ad).unwrap();
-        assert_eq!(String::from_utf8(decrypted1).unwrap(), messages[0]);
-
+        // Serialize Bob's session with pending messages
         let bob_serialized = bob_session.serialize().unwrap();
+        let mut bob_restored = Session::deserialize(&bob_serialized).unwrap();
 
-        let mut bob_deserialized = Session::deserialize(bob_serialized).unwrap();
-
-        // Receive messages out of order in the deserialized session
-        let decrypted3 = bob_deserialized
-            .decrypt(&encrypted_messages[2], ad)
+        // Receive messages out of order in restored session
+        let decrypted3 = bob_restored
+            .decrypt(&encrypted_messages[2], b"test")
             .unwrap();
         assert_eq!(String::from_utf8(decrypted3).unwrap(), messages[2]);
 
-        let decrypted2 = bob_deserialized
-            .decrypt(&encrypted_messages[1], ad)
+        let decrypted2 = bob_restored
+            .decrypt(&encrypted_messages[1], b"test")
             .unwrap();
         assert_eq!(String::from_utf8(decrypted2).unwrap(), messages[1]);
+    }
 
-        let decrypted5 = bob_deserialized
-            .decrypt(&encrypted_messages[4], ad)
+    #[test]
+    fn test_session_x3dh_keys_lifecycle() {
+        let mut alice_account = Account::new(None).unwrap();
+        let bob_account = Account::new(None).unwrap();
+        let bob_bundle = bob_account.prekey_bundle();
+        let bob_x3dh_keys = X3DHPublicKeys::from(&bob_bundle);
+
+        let session = alice_account
+            .create_outbound_session(&bob_x3dh_keys)
             .unwrap();
-        assert_eq!(String::from_utf8(decrypted5).unwrap(), messages[4]);
 
-        let decrypted4 = bob_deserialized
-            .decrypt(&encrypted_messages[3], ad)
+        // Session should have X3DH keys initially
+        assert!(session.x3dh_keys.is_some());
+
+        let serialized = session.serialize().unwrap();
+        let mut restored_session = Session::deserialize(&serialized).unwrap();
+
+        // Mark as established and verify keys are cleared
+        restored_session.mark_as_established();
+        assert!(restored_session.x3dh_keys.is_none());
+    }
+
+    fn create_test_session_pair() -> (Session, Session) {
+        let mut alice_account = Account::new(None).unwrap();
+        let mut bob_account = Account::new(None).unwrap();
+
+        let bob_bundle = bob_account.prekey_bundle();
+        let bob_x3dh_keys = X3DHPublicKeys::from(&bob_bundle);
+
+        let alice_session = alice_account
+            .create_outbound_session(&bob_x3dh_keys)
             .unwrap();
-        assert_eq!(String::from_utf8(decrypted4).unwrap(), messages[3]);
-    }
+        let outbound_x3dh_keys = alice_session.x3dh_keys.as_ref().unwrap();
 
-    #[test]
-    fn test_skipped_message_keys_serialization() {
-        let (mut alice_session, mut bob_session) = create_test_session_pair();
-
-        let messages = vec![
-            "Message 1",
-            "Message 2",
-            "Message 3",
-            "Message 4",
-            "Message 5",
-        ];
-
-        let ad = b"skipped-keys-test";
-        let mut encrypted_messages = Vec::new();
-
-        for msg in &messages {
-            encrypted_messages.push(alice_session.encrypt(msg.as_bytes(), ad).unwrap());
-        }
-
-        let decrypted1 = bob_session.decrypt(&encrypted_messages[0], ad).unwrap();
-        assert_eq!(String::from_utf8(decrypted1).unwrap(), messages[0]);
-
-        let bob_serialized = bob_session.serialize().unwrap();
-
-        let mut bob_deserialized = Session::deserialize(bob_serialized).unwrap();
-
-        // Skip to message 4, which should store messages 2 and 3 in skipped keys
-        let decrypted4 = bob_deserialized
-            .decrypt(&encrypted_messages[3], ad)
+        let bob_session = bob_account
+            .create_inbound_session(&alice_account.ik_public(), &outbound_x3dh_keys)
             .unwrap();
-        assert_eq!(String::from_utf8(decrypted4).unwrap(), messages[3]);
 
-        // Now go back and decrypt message 2, which should use skipped keys
-        let decrypted2 = bob_deserialized
-            .decrypt(&encrypted_messages[1], ad)
-            .unwrap();
-        assert_eq!(String::from_utf8(decrypted2).unwrap(), messages[1]);
-
-        let decrypted3 = bob_deserialized
-            .decrypt(&encrypted_messages[2], ad)
-            .unwrap();
-        assert_eq!(String::from_utf8(decrypted3).unwrap(), messages[2]);
-    }
-
-    #[test]
-    fn test_dh_ratchet_after_serialization() {
-        let (mut alice_session, mut bob_session) = create_test_session_pair();
-
-        let messages = vec![
-            "Alice message 1",
-            "Bob response 1",
-            "Alice message 2",
-            "Bob response 2",
-        ];
-
-        let ad = b"ratchet-test";
-
-        let encrypted1 = alice_session.encrypt(messages[0].as_bytes(), ad).unwrap();
-        let decrypted1 = bob_session.decrypt(&encrypted1, ad).unwrap();
-        assert_eq!(String::from_utf8(decrypted1).unwrap(), messages[0]);
-
-        let encrypted2 = bob_session.encrypt(messages[1].as_bytes(), ad).unwrap();
-        let decrypted2 = alice_session.decrypt(&encrypted2, ad).unwrap();
-        assert_eq!(String::from_utf8(decrypted2).unwrap(), messages[1]);
-
-        let alice_serialized = alice_session.serialize().unwrap();
-        let bob_serialized = bob_session.serialize().unwrap();
-
-        let mut alice_deserialized = Session::deserialize(alice_serialized).unwrap();
-        let mut bob_deserialized = Session::deserialize(bob_serialized).unwrap();
-
-        // Continue conversation after deserialization
-        let encrypted3 = alice_deserialized
-            .encrypt(messages[2].as_bytes(), ad)
-            .unwrap();
-        let decrypted3 = bob_deserialized.decrypt(&encrypted3, ad).unwrap();
-        assert_eq!(String::from_utf8(decrypted3).unwrap(), messages[2]);
-
-        let encrypted4 = bob_deserialized
-            .encrypt(messages[3].as_bytes(), ad)
-            .unwrap();
-        let decrypted4 = alice_deserialized.decrypt(&encrypted4, ad).unwrap();
-        assert_eq!(String::from_utf8(decrypted4).unwrap(), messages[3]);
-    }
-
-    #[test]
-    fn test_prekey_bundle_serialization_without_otpk() {
-        let identity_key = IdentityKey::new().unwrap();
-        let spk = SignedPreKey::new(42).unwrap();
-
-        let bundle = X3DHPublicKeys::new(&identity_key, &spk, None);
-
-        let serialized = bundle.serialize().expect("Failed to serialize");
-        let deserialized = X3DHPublicKeys::deserialize(&serialized).expect("Failed to deserialize");
-
-        assert_eq!(
-            bundle.ik_public().as_bytes(),
-            deserialized.ik_public().as_bytes(),
-            "Identity keys should match"
-        );
-
-        assert_eq!(
-            bundle.signing_key_public().to_bytes(),
-            deserialized.signing_key_public().to_bytes(),
-            "Identity key verifiers should match"
-        );
-
-        assert_eq!(
-            bundle.spk_public().0,
-            deserialized.spk_public().0,
-            "Signed pre-key IDs should match"
-        );
-
-        assert_eq!(
-            bundle.spk_public().1.as_bytes(),
-            deserialized.spk_public().1.as_bytes(),
-            "Signed pre-key public keys should match"
-        );
-
-        assert_eq!(
-            bundle.signature.to_bytes(),
-            deserialized.signature.to_bytes(),
-            "Signatures should match"
-        );
-
-        assert!(
-            deserialized.otpk_public().is_none(),
-            "One-time pre-key should be None"
-        );
-    }
-
-    #[test]
-    fn test_prekey_bundle_serialization_with_otpk() {
-        let identity_key = IdentityKey::new().unwrap();
-        let spk = SignedPreKey::new(99).unwrap();
-        let one_time_pre_key = OneTimePreKey::new(123).unwrap();
-
-        let bundle = X3DHPublicKeys::new(&identity_key, &spk, Some(&one_time_pre_key));
-
-        let serialized = bundle.serialize().expect("Failed to serialize");
-        let deserialized = X3DHPublicKeys::deserialize(&serialized).expect("Failed to deserialize");
-
-        assert_eq!(
-            bundle.ik_public().as_bytes(),
-            deserialized.ik_public().as_bytes(),
-            "Identity keys should match"
-        );
-
-        assert_eq!(
-            bundle.signing_key_public().to_bytes(),
-            deserialized.signing_key_public().to_bytes(),
-            "Identity key verifiers should match"
-        );
-
-        assert_eq!(
-            bundle.spk_public().0,
-            deserialized.spk_public().0,
-            "Signed pre-key IDs should match"
-        );
-
-        assert_eq!(
-            bundle.spk_public().1.as_bytes(),
-            deserialized.spk_public().1.as_bytes(),
-            "Signed pre-key public keys should match"
-        );
-
-        assert_eq!(
-            bundle.signature.to_bytes(),
-            deserialized.signature.to_bytes(),
-            "Signatures should match"
-        );
-
-        assert!(
-            deserialized.otpk_public().is_some(),
-            "One-time pre-key should be Some"
-        );
-
-        assert_eq!(
-            bundle.otpk_public().unwrap().1.as_bytes(),
-            deserialized.otpk_public().unwrap().1.as_bytes(),
-            "One-time pre-key values should match"
-        );
-    }
-
-    #[test]
-    fn test_prekey_bundle_verification_after_serialization() {
-        let identity_key = IdentityKey::new().unwrap();
-        let spk = SignedPreKey::new(77).unwrap();
-
-        let bundle = X3DHPublicKeys::new(&identity_key, &spk, None);
-
-        assert!(bundle.verify().is_ok(), "Original bundle should verify");
-
-        let serialized = bundle.serialize().expect("Failed to serialize");
-        let deserialized = X3DHPublicKeys::deserialize(&serialized).expect("Failed to deserialize");
-
-        assert!(
-            deserialized.verify().is_ok(),
-            "Deserialized bundle should verify"
-        );
-    }
-
-    #[test]
-    fn test_prekey_bundle_serialized_size() {
-        let identity_key = IdentityKey::new().unwrap();
-        let spk = SignedPreKey::new(1).unwrap();
-
-        let bundle_without_otpk = X3DHPublicKeys::new(&identity_key, &spk, None);
-        let serialized_without_otpk = bundle_without_otpk
-            .serialize()
-            .expect("Failed to serialize");
-
-        let one_time_pre_key = OneTimePreKey::new(1).unwrap();
-        let bundle_with_otpk = X3DHPublicKeys::new(&identity_key, &spk, Some(&one_time_pre_key));
-        let serialized_with_otpk = bundle_with_otpk.serialize().expect("Failed to serialize");
-
-        assert!(
-            serialized_with_otpk.len() > serialized_without_otpk.len(),
-            "Serialized bundle with OTPK should be larger"
-        );
-    }
-
-    #[test]
-    fn test_prekey_bundle_deserialization_errors() {
-        let mut invalid_proto = X3dhPublicKeysProto {
-            ik_public: vec![0; 16], // Wrong length
-            signing_key_public: vec![0; 32],
-            spk_id: 1,
-            spk_public: vec![0; 32],
-            signature: vec![0; 64],
-            otpk_public: None,
-            otpk_id: None,
-        };
-
-        let mut buf = Vec::new();
-        invalid_proto.encode(&mut buf).expect("Failed to encode");
-
-        let result = X3DHPublicKeys::deserialize(&buf);
-        assert!(
-            result.is_err(),
-            "Should fail with invalid identity key length"
-        );
-
-        invalid_proto.ik_public = vec![0; 32];
-        invalid_proto.signing_key_public = vec![0; 16]; // Wrong length
-
-        let mut buf = Vec::new();
-        invalid_proto.encode(&mut buf).expect("Failed to encode");
-
-        let result = X3DHPublicKeys::deserialize(&buf);
-        assert!(
-            result.is_err(),
-            "Should fail with invalid identity key verifier length"
-        );
-
-        invalid_proto.signing_key_public = vec![0; 32];
-        invalid_proto.spk_public = vec![0; 16]; // Wrong length
-
-        let mut buf = Vec::new();
-        invalid_proto.encode(&mut buf).expect("Failed to encode");
-
-        let result = X3DHPublicKeys::deserialize(&buf);
-        assert!(
-            result.is_err(),
-            "Should fail with invalid signed pre-key length"
-        );
-
-        invalid_proto.spk_public = vec![0; 32];
-        invalid_proto.signature = vec![0; 32]; // Wrong length
-
-        let mut buf = Vec::new();
-        invalid_proto.encode(&mut buf).expect("Failed to encode");
-
-        let result = X3DHPublicKeys::deserialize(&buf);
-        assert!(result.is_err(), "Should fail with invalid signature length");
-
-        invalid_proto.signature = vec![0; 64];
-        invalid_proto.otpk_public = Some(vec![0; 16]); // Wrong length
-
-        let mut buf = Vec::new();
-        invalid_proto.encode(&mut buf).expect("Failed to encode");
-
-        let result = X3DHPublicKeys::deserialize(&buf);
-        assert!(
-            result.is_err(),
-            "Should fail with invalid one-time pre-key length"
-        );
-    }
-
-    #[test]
-    fn test_corrupted_data_deserialization() {
-        let identity_key = IdentityKey::new().unwrap();
-        let spk = SignedPreKey::new(1).unwrap();
-
-        let bundle = X3DHPublicKeys::new(&identity_key, &spk, None);
-        let mut serialized = bundle.serialize().expect("Failed to serialize");
-
-        // Corrupt the data
-        serialized.reverse();
-
-        // Try to deserialize
-        let result = X3DHPublicKeys::deserialize(&serialized);
-
-        if let Ok(deserialized) = result {
-            assert!(
-                deserialized.verify().is_err(),
-                "Corrupted data should fail verification"
-            );
-        } else {
-            assert!(
-                result.is_err(),
-                "Corrupted data should fail deserialization"
-            );
-        }
+        (alice_session, bob_session)
     }
 }

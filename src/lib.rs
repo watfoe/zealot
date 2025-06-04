@@ -1,4 +1,4 @@
-//! # A naive Signal Protocol Implementation
+//! # A Signal Protocol Implementation
 //!
 //! A Rust implementation of the Signal Protocol for secure, end-to-end encrypted messaging,
 //! including X3DH (Extended Triple Diffie-Hellman) key agreement and the Double Ratchet
@@ -10,8 +10,9 @@
 //! - **Double Ratchet Algorithm**: Provides forward secrecy and break-in recovery
 //! - **Identity Key Management**: Long-term identity keys for authentication
 //! - **Pre-Key Bundles**: Signed pre-keys and one-time pre-keys for session establishment
-//! - **Session Management**: Secure communication channels between users
-//! - **Account Management**: User identity, key rotation, and session tracking
+//! - **Independent Session Management**: Sessions can be managed separately from accounts
+//! - **Granular Serialization**: Accounts and sessions can be serialized independently
+//! - **Concurrent Message Processing**: Multiple sessions can encrypt/decrypt concurrently
 //!
 //! ## Security Properties
 //!
@@ -23,9 +24,7 @@
 //! - **Asynchronous Operation**: Secure communication even when recipients are offline
 //! - **Plausible Deniability**: Messages cannot be cryptographically proven to come from a specific sender
 //!
-//! ## Usage Examples
-//!
-//! ### Creating Accounts and Establishing Sessions
+//! ## Usage Example
 //!
 //! ```rust
 //! use zealot::{Account, AccountConfig, X3DHPublicKeys};
@@ -34,158 +33,44 @@
 //! // Create Alice's account
 //! let config = AccountConfig {
 //!     spk_rotation_interval: Duration::from_secs(7 * 24 * 60 * 60), // 1 week
-//!     min_otpks: 10,
-//!     max_otpks: 100,
-//!     max_spks: 20,
-//!     max_skipped_messages: 100,
+//!     min_otpks: 5,
+//!     max_otpks: 10,
+//!     max_spks: 2,
+//!     max_skipped_messages: 10,
 //!     protocol_info: b"com.example.secureapp".to_vec(),
 //! };
-//! let mut alice = Account::new(Some(config)).unwrap();
+//! let mut alice = Account::new(Some(config.clone())).unwrap();
 //!
 //! // Create Bob's account
-//! let mut bob = Account::new(None).unwrap(); // Use default config
+//! let mut bob = Account::new(Some(config)).unwrap(); // Use default config
 //!
-//! // Bob gets his pre-key bundle to publish
+//! // Bob publishes his pre-key bundle
 //! let bob_bundle = bob.prekey_bundle();
+//! let bob_x3dh_keys = X3DHPublicKeys::from(&bob_bundle);
 //!
 //! // Alice creates a session with Bob
-//! let bob_session_bundle = X3DHPublicKeys::from(&bob_bundle);
-//! let session_id = alice.create_outbound_session(&bob_session_bundle)
+//! let mut alice_session = alice.create_outbound_session(&bob_x3dh_keys)
 //!     .expect("Failed to create session");
 //!
-//! // Alice can now use this session to send encrypted messages to Bob
-//! ```
-//!
-//! ### Sending and Receiving Messages
-//!
-//! ```rust
-//! use zealot::{Account, AccountConfig, X3DHPublicKeys, RatchetMessage};
-//!
-//! let mut alice = Account::new(None).unwrap();
-//! let mut bob = Account::new(None).unwrap();
-//! let bob_bundle = bob.prekey_bundle();
-//! let bob_session_bundle = X3DHPublicKeys::from(&bob_bundle);
-//! let alice_session_id = alice.create_outbound_session(&bob_session_bundle).unwrap();
-//!
-//! // Alice encrypts a message for Bob
-//! let message = "Hello Bob! This is a secure message.";
-//! let associated_data = b"message-id-12345"; // Additional authenticated data
-//!
-//! let encrypted_message = {
-//!     let alice_session = alice.session_mut(&alice_session_id)
-//!         .expect("Session not found");
-//!
-//!     alice_session.encrypt(message.as_bytes(), associated_data)
-//!         .expect("Encryption failed")
-//! };
-//!
-//! // Bob processes Alice's initial message and creates a session
-//! // This would normally happen after receiving Alice's message over a network
-//! let alice_identity_key = alice.ik().dh_key_public();
-//! let alice_ephemeral_key = alice.session(&alice_session_id).unwrap().x3dh_ephemeral_key_public.unwrap();
-//!
-//! let bob_session_id = bob.create_inbound_session(
-//!     &alice_identity_key,
-//!     &alice_ephemeral_key,
-//!     bob_bundle.spk_public.0,
-//!     None // Optional one-time pre-key ID
-//! ).expect("Failed to process session initiation");
-//!
-//! // Bob decrypts Alice's message
-//! let decrypted_message = {
-//!     let bob_session = bob.session_mut(&bob_session_id)
-//!         .expect("Session not found");
-//!
-//!     bob_session.decrypt(&encrypted_message, associated_data)
-//!         .expect("Decryption failed")
-//! };
-//!
-//! assert_eq!(
-//!     String::from_utf8(decrypted_message).unwrap(),
-//!     message
-//! );
-//!
-//! // Bob can now send encrypted replies to Alice
-//! let reply = "Hello Alice! I received your message.";
-//!
-//! let encrypted_reply = {
-//!     let bob_session = bob.session_mut(&bob_session_id)
-//!         .expect("Session not found");
-//!
-//!     bob_session.encrypt(reply.as_bytes(), associated_data)
-//!         .expect("Encryption failed")
-//! };
-//!
-//! // Alice decrypts Bob's reply
-//! let decrypted_reply = {
-//!     let alice_session = alice.session_mut(&alice_session_id)
-//!         .expect("Session not found");
-//!
-//!     alice_session.decrypt(&encrypted_reply, associated_data)
-//!         .expect("Decryption failed")
-//! };
-//!
-//! assert_eq!(
-//!     String::from_utf8(decrypted_reply).unwrap(),
-//!     reply
-//! );
-//! ```
-//!
-//! ### Handling Out-of-Order Messages
-//!
-//! ```rust
-//! use zealot::{Account, RatchetMessage, X3DHPublicKeys};
-//!
-//! let mut alice = Account::new(None).unwrap();
-//! let mut bob = Account::new(None).unwrap();
-//! let bob_bundle = bob.prekey_bundle();
-//! let bob_session_bundle = X3DHPublicKeys::from(&bob_bundle);
-//!
-//! let alice_session_id = alice.create_outbound_session(&bob_session_bundle).unwrap();
-//! let alice_identity_key = alice.ik().dh_key_public();
-//! let alice_ephemeral_key = alice.session(&alice_session_id).unwrap().x3dh_ephemeral_key_public.unwrap();
-//! let bob_session_id = bob.create_inbound_session(
-//!     &alice_identity_key,
-//!     &alice_ephemeral_key,
-//!     bob_bundle.spk_public.0,
-//!     None
+//! // Bob processes Alice's session initiation
+//! let outbound_x3dh_keys = alice_session.x3dh_keys.as_ref().unwrap();
+//! let mut bob_session = bob.create_inbound_session(
+//!     &alice.ik_public(),
+//!     &outbound_x3dh_keys
 //! ).unwrap();
 //!
-//! // Alice sends multiple messages
-//! let alice_session = alice.session_mut(&alice_session_id).unwrap();
-//! let message1 = alice_session.encrypt(b"Message 1", b"AD").unwrap();
-//! let message2 = alice_session.encrypt(b"Message 2", b"AD").unwrap();
-//! let message3 = alice_session.encrypt(b"Message 3", b"AD").unwrap();
+//! // Alice encrypts a message
+//! let message = "Hello Bob! This is a secure message.";
+//! let associated_data = b"message-id-12345";
+//! let encrypted_message = alice_session.encrypt(message.as_bytes(), associated_data)
+//!     .expect("Encryption failed");
 //!
-//! // Bob receives them out of order: 1, 3, 2
-//! let bob_session = bob.session_mut(&bob_session_id).unwrap();
+//! // Bob decrypts the message
+//! let decrypted_message = bob_session.decrypt(&encrypted_message, associated_data)
+//!     .expect("Decryption failed");
 //!
-//! // Decrypt message 1
-//! let decrypted1 = bob_session.decrypt(&message1, b"AD").unwrap();
-//! assert_eq!(decrypted1, b"Message 1");
-//!
-//! // Decrypt message 3 (out of order)
-//! let decrypted3 = bob_session.decrypt(&message3, b"AD").unwrap();
-//! assert_eq!(decrypted3, b"Message 3");
-//!
-//! // Decrypt message 2 (which was delayed)
-//! let decrypted2 = bob_session.decrypt(&message2, b"AD").unwrap();
-//! assert_eq!(decrypted2, b"Message 2");
-//!
-//! // The Double Ratchet algorithm correctly handles out-of-order messages
-//! // as long as they are within the configured max_skip window
+//! assert_eq!(String::from_utf8(decrypted_message).unwrap(), message);
 //! ```
-//!
-//! ### End-to-End Encryption Architecture
-//!
-//! This library implements all the cryptographic components needed for a secure
-//! messaging application, but you will need to provide:
-//!
-//! 1. **Network Transport**: Sending and receiving encrypted messages
-//! 2. **Key Distribution**: Publishing and retrieving pre-key bundles
-//! 3. **Message Serialization**: Converting messages to/from wire format
-//! 4. **User Authentication**: Verifying user identities
-//! 5. **Key Storage**: Securely storing private keys and session state
 //!
 //! ## Protocol Details
 //!
@@ -202,7 +87,7 @@
 //! - **Key Verification**: Out-of-band verification of identity keys
 //! - **Secure Storage**: Protection of private keys and session state
 //! - **Metadata Protection**: Encrypting or minimizing metadata
-//! - **Perfect Forward Secrecy**: Regular key rotation
+//! - **Perfect Forward Secrecy**: Regular key rotation and session refresh
 
 mod types;
 pub use types::*;

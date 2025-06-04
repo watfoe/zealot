@@ -5,7 +5,7 @@ use ed25519_dalek::{SecretKey, SigningKey, ed25519};
 use rand::TryRngCore;
 use rand::rngs::OsRng;
 use x25519_dalek::SharedSecret;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Generates a cryptographically secure random 32-byte seed.
 pub(crate) fn generate_random_seed() -> Result<Box<[u8; 32]>, Error> {
@@ -40,6 +40,7 @@ impl IdentityKey {
     }
 
     /// Signs a message using the Ed25519 signing key.
+    #[inline]
     pub fn sign(&self, message: &[u8]) -> ed25519_dalek::Signature {
         self.signing_key.sign(message)
     }
@@ -55,16 +56,19 @@ impl IdentityKey {
     }
 
     /// Returns the public Ed25519 signing key for this identity.
+    #[inline]
     pub fn signing_key_public(&self) -> ed25519_dalek::VerifyingKey {
         self.signing_key.verifying_key()
     }
 
     /// Returns the public X25519 key for Diffie-Hellman operations.
+    #[inline]
     pub fn dh_key_public(&self) -> X25519PublicKey {
         self.dh_key.public_key()
     }
 
     /// Performs Diffie-Hellman key agreement with another party's public key.
+    #[inline]
     pub fn dh(&self, public_key: &X25519PublicKey) -> SharedSecret {
         self.dh_key.dh(public_key)
     }
@@ -102,6 +106,15 @@ impl From<[u8; 64]> for IdentityKey {
         }
     }
 }
+
+impl Zeroize for IdentityKey {
+    fn zeroize(&mut self) {
+        *self.signing_key = SigningKey::from_bytes(&SecretKey::from([0u8; 32]));
+        self.dh_key.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for IdentityKey {}
 
 #[cfg(test)]
 mod tests {
