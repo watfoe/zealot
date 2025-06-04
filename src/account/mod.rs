@@ -102,7 +102,7 @@ impl Account {
     /// Implements the initiator's (Alice's) side of the X3DH protocol using
     /// the other user's pre-key bundle.
     pub fn create_outbound_session(
-        &mut self,
+        &self,
         bob_x3dh_public_keys: &X3DHPublicKeys,
     ) -> Result<Session, Error> {
         let x3dh_result = X3DH::new(&self.config.protocol_info)

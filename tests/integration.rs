@@ -6,7 +6,7 @@ mod integration_tests {
     #[test]
     fn test_full_protocol_flow() {
         println!("Step 1: Creating accounts for Alice and Bob...");
-        let mut alice_account = Account::new(None).unwrap();
+        let alice_account = Account::new(None).unwrap();
         let mut bob_account = Account::new(None).unwrap();
 
         println!("Step 2: Bob publishes his pre-key bundle...");
@@ -161,7 +161,7 @@ mod integration_tests {
     #[test]
     fn test_multiple_sessions() {
         println!("Setting up accounts for Alice, Bob, and Charlie...");
-        let mut alice_account = Account::new(None).unwrap();
+        let alice_account = Account::new(None).unwrap();
         let mut bob_account = Account::new(None).unwrap();
         let mut charlie_account = Account::new(None).unwrap();
 
@@ -279,7 +279,7 @@ mod integration_tests {
     #[test]
     fn test_session_resumption_after_key_loss() {
         println!("Setting up accounts for Alice and Bob...");
-        let mut alice_account = Account::new(None).unwrap();
+        let alice_account = Account::new(None).unwrap();
         let mut bob_account = Account::new(None).unwrap();
 
         println!("Establishing initial session...");
@@ -386,7 +386,7 @@ mod integration_tests {
     fn test_concurrent_session_serialization() {
         println!("Testing concurrent session operations and serialization...");
 
-        let mut alice_account = Account::new(None).unwrap();
+        let alice_account = Account::new(None).unwrap();
         let mut bob_account = Account::new(None).unwrap();
 
         // Create session

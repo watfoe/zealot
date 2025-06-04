@@ -495,7 +495,7 @@ mod tests {
 
     #[test]
     fn test_session_x3dh_keys_lifecycle() {
-        let mut alice_account = Account::new(None).unwrap();
+        let alice_account = Account::new(None).unwrap();
         let bob_account = Account::new(None).unwrap();
         let bob_bundle = bob_account.prekey_bundle();
         let bob_x3dh_keys = X3DHPublicKeys::from(&bob_bundle);
@@ -516,7 +516,7 @@ mod tests {
     }
 
     fn create_test_session_pair() -> (Session, Session) {
-        let mut alice_account = Account::new(None).unwrap();
+        let alice_account = Account::new(None).unwrap();
         let mut bob_account = Account::new(None).unwrap();
 
         let bob_bundle = bob_account.prekey_bundle();
