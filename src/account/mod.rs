@@ -115,6 +115,7 @@ impl Account {
         let ratchet = DoubleRatchet::initialize_for_alice(
             x3dh_result.shared_secret(),
             &bob_x3dh_public_keys.spk_public().1,
+            self.config.max_skipped_messages,
         );
 
         let session = Session::new(
@@ -163,7 +164,11 @@ impl Account {
             &outbound_session_x3dhkeys.ephemeral_key_public,
         )?;
 
-        let ratchet = DoubleRatchet::initialize_for_bob(shared_secret, self.spk().key_pair());
+        let ratchet = DoubleRatchet::initialize_for_bob(
+            shared_secret,
+            self.spk().key_pair(),
+            self.config.max_skipped_messages,
+        );
         let session_id = self.derive_session_id(
             alice_ik_public,
             &outbound_session_x3dhkeys.ephemeral_key_public,

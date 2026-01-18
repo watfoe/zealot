@@ -128,6 +128,7 @@ mod tests {
         let alice_ratchet = DoubleRatchet::initialize_for_alice(
             x3dh_result.shared_secret(),
             &bob_bundle.spk_public().1,
+            10,
         );
 
         // Create a session ID for Alice
@@ -155,7 +156,7 @@ mod tests {
 
         // Bob initializes his Double Ratchet
         let bob_ratchet =
-            DoubleRatchet::initialize_for_bob(bob_shared_secret, bob_signed_pre_key.key_pair());
+            DoubleRatchet::initialize_for_bob(bob_shared_secret, bob_signed_pre_key.key_pair(), 10);
 
         // Create a session ID for Bob
         let bob_session_id = "bob-to-alice".to_string();

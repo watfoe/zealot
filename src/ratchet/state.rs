@@ -4,19 +4,23 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 #[derive(Clone)]
 pub(crate) struct RatchetState {
+    /// Current DH key pair for this participant
     pub(crate) dh_pair: X25519Secret,
-
+    /// Remote participant's current DH public key
     pub(crate) remote_dh_key_public: Option<X25519PublicKey>,
 
     pub(crate) root_key: Box<[u8; 32]>,
+    /// Chain for encrypting outgoing messages
     pub(crate) sending_chain: Chain,
+    /// Chain for decrypting incoming messages
     pub(crate) receiving_chain: Chain,
 
-    // Message counters
+    // Message counters for ordering
     pub(crate) previous_sending_chain_length: u32,
     pub(crate) sending_message_number: u32,
     pub(crate) receiving_message_number: u32,
 
+    // Header encryption keys (for metadata protection)
     pub(crate) sending_header_key: Option<Box<[u8; 32]>>,
     pub(crate) receiving_header_key: Option<Box<[u8; 32]>>,
     pub(crate) next_sending_header_key: Box<[u8; 32]>,

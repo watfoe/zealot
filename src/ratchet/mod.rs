@@ -81,6 +81,7 @@ impl DoubleRatchet {
     pub fn initialize_for_alice(
         mut shared_secret: X3DHSharedSecret,
         bob_public_key: &X25519PublicKey,
+        max_skipped_messages: u32,
     ) -> Self {
         // TODO: We shouldn't unwrap
         let seed = generate_random_seed().unwrap();
@@ -101,21 +102,21 @@ impl DoubleRatchet {
 
         Self {
             state: RatchetState {
-                dh_pair,
                 root_key: new_root_key,
+                dh_pair,
                 remote_dh_key_public: Some(*bob_public_key),
                 sending_chain,
                 sending_header_key: Some(header_key_a),
                 next_sending_header_key,
-                next_receiving_header_key: Some(next_header_key_b),
                 receiving_chain: Default::default(),
+                receiving_header_key: None,
+                next_receiving_header_key: Some(next_header_key_b),
                 previous_sending_chain_length: 0,
                 sending_message_number: 0,
                 receiving_message_number: 0,
-                receiving_header_key: None,
             },
-            skipped_message_keys: HashMap::with_capacity(100),
-            max_skip: 100,
+            skipped_message_keys: HashMap::new(),
+            max_skip: max_skipped_messages,
         }
     }
 
@@ -123,27 +124,31 @@ impl DoubleRatchet {
     ///
     /// This is typically called by Bob after processing
     /// the X3DH key agreement initiated by Alice.
-    pub fn initialize_for_bob(shared_secret: X3DHSharedSecret, dh_pair: X25519Secret) -> Self {
+    pub fn initialize_for_bob(
+        shared_secret: X3DHSharedSecret,
+        dh_pair: X25519Secret,
+        max_skipped_messages: u32,
+    ) -> Self {
         let (header_key_a, next_header_key_b) =
             DoubleRatchet::derive_initial_header_keys(&shared_secret);
 
         Self {
             state: RatchetState {
-                dh_pair,
                 root_key: shared_secret.0.clone(),
-                receiving_header_key: Some(header_key_a.clone()),
-                next_sending_header_key: next_header_key_b,
-                next_receiving_header_key: Some(header_key_a),
+                dh_pair,
                 remote_dh_key_public: None,
                 sending_chain: Default::default(),
                 sending_header_key: None,
+                next_sending_header_key: next_header_key_b,
                 receiving_chain: Default::default(),
+                receiving_header_key: Some(header_key_a.clone()),
+                next_receiving_header_key: Some(header_key_a),
                 previous_sending_chain_length: 0,
                 sending_message_number: 0,
                 receiving_message_number: 0,
             },
-            skipped_message_keys: HashMap::with_capacity(100),
-            max_skip: 100,
+            skipped_message_keys: HashMap::new(),
+            max_skip: max_skipped_messages,
         }
     }
 
@@ -260,6 +265,36 @@ impl DoubleRatchet {
         }
     }
 
+    /// Encrypt a message
+    fn encrypt_message(key: &[u8; 32], plaintext: &[u8], ad: &[u8]) -> Result<Vec<u8>, Error> {
+        // Derive encryption key, authentication key, and IV from the message key
+        let hkdf = Hkdf::<Sha256>::new(None, key);
+
+        // Generate 80 bytes: 32 for encryption key, 32 for auth key, 16 for IV
+        let mut derived_material = [0u8; 80];
+        hkdf.expand(b"Zealot-E2E-Keys", &mut derived_material)
+            .expect("HKDF expansion failed");
+
+        // Extract the nonce (use first 12 bytes of the IV)
+        let mut nonce_bytes = [0u8; NONCE_SIZE];
+        nonce_bytes.copy_from_slice(&derived_material[64..64 + NONCE_SIZE]);
+
+        // Use the encryption key for AES-GCM
+        let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(&derived_material[0..32]);
+        let cipher = Aes256GcmSiv::new(key);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        cipher
+            .encrypt(
+                nonce,
+                aes_gcm_siv::aead::Payload {
+                    msg: plaintext,
+                    aad: ad,
+                },
+            )
+            .map_err(|_| Error::Protocol("Message encryption failed".to_string()))
+    }
+
     /// Decrypts a message using the Double Ratchet algorithm.
     ///
     /// This performs the following steps:
@@ -277,29 +312,37 @@ impl DoubleRatchet {
         // Clone the state so that if the decryption fails, we revert back to the old state
         let old_state = self.state.clone();
 
-        let header = self.try_decrypt_header(&message.header).map_err(|err| {
-            self.state = old_state.clone();
-            err
-        })?;
+        let header = match self.try_decrypt_header(&message.header) {
+            Ok(h) => h,
+            Err(err) => {
+                self.state = old_state;
+                return Err(err)?
+            }
+        };
 
         // Check if ratchet public key has changed
         if self.state.remote_dh_key_public.is_none()
             || header.public_key != self.state.remote_dh_key_public.unwrap()
         {
             // Ratchet step - DH key has changed
-            self.dh_ratchet(&header).map_err(|err| {
-                self.state = old_state.clone();
-                err
-            })?;
+            match self.dh_ratchet(&header) {
+                Err(err) => {
+                    self.state = old_state;
+                    return Err(err)?
+                }
+                _ => {}
+            };
         }
 
         // Skip ahead if needed
         if header.message_number > self.state.receiving_message_number {
-            self.skip_message_keys(header.message_number)
-                .map_err(|err| {
-                    self.state = old_state.clone();
-                    err
-                })?;
+            match self.skip_message_keys(header.message_number) {
+                Err(err) => {
+                    self.state = old_state;
+                    return Err(err)?
+                }
+                _ => {}
+            };
         }
 
         // Get the current message key
@@ -311,13 +354,32 @@ impl DoubleRatchet {
             Self::decrypt_message(&message_key, &message.ciphertext, buffer)
         })
         .map_err(|err| {
-            self.state = old_state.clone();
+            self.state = old_state;
             err
         })?;
 
         self.state.receiving_message_number = self.state.receiving_message_number.wrapping_add(1);
 
         Ok(plaintext)
+    }
+
+    /// Tries to decrypt a header with both current and next header keys.
+    ///
+    /// This allows for recovery if a header key rotation has happened.
+    fn try_decrypt_header(&mut self, encrypted_header: &[u8]) -> Result<MessageHeader, Error> {
+        if let Some(ref rhk) = self.state.receiving_header_key {
+            if let Some(header) = self.decrypt_header(encrypted_header, rhk) {
+                return Ok(header);
+            }
+        }
+
+        if let Some(ref nrhk) = self.state.next_receiving_header_key {
+            if let Some(header) = self.decrypt_header(encrypted_header, nrhk) {
+                return Ok(header);
+            }
+        }
+
+        Err(Error::Protocol("Failed to decrypt header".to_string()))
     }
 
     /// Decrypts a message header using a specific header key.
@@ -345,25 +407,6 @@ impl DoubleRatchet {
             }
             Err(_) => None,
         }
-    }
-
-    /// Tries to decrypt a header with both current and next header keys.
-    ///
-    /// This allows for recovery if a header key rotation has happened.
-    fn try_decrypt_header(&mut self, encrypted_header: &[u8]) -> Result<MessageHeader, Error> {
-        if let Some(rhk) = self.state.receiving_header_key.clone() {
-            if let Some(header) = self.decrypt_header(encrypted_header, &rhk) {
-                return Ok(header);
-            }
-        }
-
-        if let Some(nrhk) = self.state.next_receiving_header_key.clone() {
-            if let Some(header) = self.decrypt_header(encrypted_header, &nrhk) {
-                return Ok(header);
-            }
-        }
-
-        Err(Error::Protocol("Failed to decrypt header".to_string()))
     }
 
     /// Tries to decrypt a message using previously skipped message keys.
@@ -460,36 +503,6 @@ impl DoubleRatchet {
         Ok(())
     }
 
-    /// Encrypt a message
-    fn encrypt_message(key: &[u8; 32], plaintext: &[u8], ad: &[u8]) -> Result<Vec<u8>, Error> {
-        // Derive encryption key, authentication key, and IV from the message key
-        let hkdf = Hkdf::<Sha256>::new(None, key);
-
-        // Generate 80 bytes: 32 for encryption key, 32 for auth key, 16 for IV
-        let mut derived_material = [0u8; 80];
-        hkdf.expand(b"Zealot-E2E-Keys", &mut derived_material)
-            .expect("HKDF expansion failed");
-
-        // Extract the nonce (use first 12 bytes of the IV)
-        let mut nonce_bytes = [0u8; NONCE_SIZE];
-        nonce_bytes.copy_from_slice(&derived_material[64..64 + NONCE_SIZE]);
-
-        // Use the encryption key for AES-GCM
-        let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(&derived_material[0..32]);
-        let cipher = Aes256GcmSiv::new(key);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        cipher
-            .encrypt(
-                nonce,
-                aes_gcm_siv::aead::Payload {
-                    msg: plaintext,
-                    aad: ad,
-                },
-            )
-            .map_err(|_| Error::Protocol("Message encryption failed".to_string()))
-    }
-
     /// Decrypt a message
     fn decrypt_message(
         key: &Box<[u8; 32]>,
@@ -536,10 +549,14 @@ mod tests {
         let alice_ratchet = DoubleRatchet::initialize_for_alice(
             X3DHSharedSecret(shared_secret.clone()),
             &bob_spk.public_key(),
+            20,
         );
 
-        let bob_ratchet =
-            DoubleRatchet::initialize_for_bob(X3DHSharedSecret(shared_secret), bob_spk.key_pair());
+        let bob_ratchet = DoubleRatchet::initialize_for_bob(
+            X3DHSharedSecret(shared_secret),
+            bob_spk.key_pair(),
+            20,
+        );
 
         (alice_ratchet, bob_ratchet)
     }
