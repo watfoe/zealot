@@ -1,3 +1,5 @@
 /target
 .idea
-/afl
+/fuzz/target
+/fuzz/out
+Cargo.lock

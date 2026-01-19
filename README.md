@@ -95,4 +95,4 @@ This library implements all the cryptographic components needed for a secure mes
 
 ## ⚠️ Security Notice
 
-**This library has not undergone a security audit.**
+**THIS LIBRARY HAS NOT UNDERGONE A SECURITY AUDIT. USE AT YOUR OWN RISK!**
