@@ -6,8 +6,8 @@ mod integration_tests {
     #[test]
     fn test_full_protocol_flow() {
         println!("Step 1: Creating accounts for Alice and Bob...");
-        let alice_account = Account::new(None).unwrap();
-        let mut bob_account = Account::new(None).unwrap();
+        let alice_account = Account::new(None);
+        let mut bob_account = Account::new(None);
 
         println!("Step 2: Bob publishes his pre-key bundle...");
         let bob_bundle = bob_account.prekey_bundle();
@@ -161,9 +161,9 @@ mod integration_tests {
     #[test]
     fn test_multiple_sessions() {
         println!("Setting up accounts for Alice, Bob, and Charlie...");
-        let alice_account = Account::new(None).unwrap();
-        let mut bob_account = Account::new(None).unwrap();
-        let mut charlie_account = Account::new(None).unwrap();
+        let alice_account = Account::new(None);
+        let mut bob_account = Account::new(None);
+        let mut charlie_account = Account::new(None);
 
         println!("Getting pre-key bundles...");
         let bob_bundle = bob_account.prekey_bundle();
@@ -279,8 +279,8 @@ mod integration_tests {
     #[test]
     fn test_session_resumption_after_key_loss() {
         println!("Setting up accounts for Alice and Bob...");
-        let alice_account = Account::new(None).unwrap();
-        let mut bob_account = Account::new(None).unwrap();
+        let alice_account = Account::new(None);
+        let mut bob_account = Account::new(None);
 
         println!("Establishing initial session...");
         let bob_bundle = bob_account.prekey_bundle();
@@ -317,7 +317,7 @@ mod integration_tests {
 
         println!("Simulating Bob's session loss by creating new account...");
         // Bob loses his session state and creates a new account with fresh keys
-        let mut bob_new_account = Account::new(None).unwrap();
+        let mut bob_new_account = Account::new(None);
 
         // Bob publishes new pre-key bundle
         let bob_new_bundle = bob_new_account.prekey_bundle();
@@ -386,8 +386,8 @@ mod integration_tests {
     fn test_concurrent_session_serialization() {
         println!("Testing concurrent session operations and serialization...");
 
-        let alice_account = Account::new(None).unwrap();
-        let mut bob_account = Account::new(None).unwrap();
+        let alice_account = Account::new(None);
+        let mut bob_account = Account::new(None);
 
         // Create session
         let bob_bundle = bob_account.prekey_bundle();
@@ -432,8 +432,7 @@ mod integration_tests {
         let mut alice_account = Account::new(Some(AccountConfig {
             spk_rotation_interval: Duration::from_millis(1),
             ..AccountConfig::default()
-        }))
-        .unwrap();
+        }));
 
         let initial_bundle = alice_account.prekey_bundle();
         let initial_spk_id = initial_bundle.spk_public.0;
@@ -442,7 +441,7 @@ mod integration_tests {
         std::thread::sleep(Duration::from_millis(10));
 
         // Trigger key rotation
-        let rotation_result = alice_account.rotate_spk().unwrap();
+        let rotation_result = alice_account.rotate_spk();
         assert!(
             rotation_result.is_some(),
             "Key rotation should have occurred"
@@ -456,7 +455,7 @@ mod integration_tests {
         assert_eq!(new_bundle.spk_public.0, new_spk_id);
 
         // Test OTPK replenishment
-        let replenished_keys = alice_account.replenish_otpks().unwrap();
+        let replenished_keys = alice_account.replenish_otpks();
         println!("Replenished {} one-time pre-keys", replenished_keys.len());
 
         println!("Account key rotation test passed successfully!");

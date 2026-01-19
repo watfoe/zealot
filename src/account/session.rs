@@ -105,10 +105,10 @@ mod tests {
 
     #[test]
     fn test_session() {
-        let alice_identity = IdentityKey::new().unwrap();
-        let bob_identity = IdentityKey::new().unwrap();
-        let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
-        let bob_one_time_pre_key = OneTimePreKey::new(1).unwrap();
+        let alice_identity = IdentityKey::new();
+        let bob_identity = IdentityKey::new();
+        let bob_signed_pre_key = SignedPreKey::new(1);
+        let bob_one_time_pre_key = OneTimePreKey::new(1);
         let bob_bundle = X3DHPublicKeys::new(
             bob_identity.dh_key_public(),
             bob_identity.signing_key_public(),

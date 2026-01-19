@@ -83,8 +83,7 @@ impl DoubleRatchet {
         bob_public_key: &X25519PublicKey,
         max_skipped_messages: u32,
     ) -> Self {
-        // TODO: We shouldn't unwrap
-        let seed = generate_random_seed().unwrap();
+        let seed = generate_random_seed();
         let dh_pair = X25519Secret::from(seed);
 
         // Perform initial DH and KDF
@@ -304,31 +303,27 @@ impl DoubleRatchet {
     /// 4. Generates any skipped message keys
     /// 5. Derives the message key and decrypts the message
     pub fn decrypt(&mut self, message: &RatchetMessage, ad: &[u8]) -> Result<Vec<u8>, Error> {
-        // Try to decrypt with skipped message keys
-        if let Some(plaintext) = self.try_skipped_message_keys(message, ad)? {
-            return Ok(plaintext);
-        }
-
         // Clone the state so that if the decryption fails, we revert back to the old state
         let old_state = self.state.clone();
 
-        let (header, should_ratchet) = match self.try_decrypt_header(&message.header) {
-            Ok(h) => h,
+        match self.try_skipped_message_keys(message, ad) {
+            Ok(plaintext) => {
+                if let Some(plaintext) = plaintext {
+                    return Ok(plaintext)
+                }
+            }
             Err(err) => {
                 self.state = old_state;
-                return Err(err)?
+                return Err(err);
             }
-        };
-        
+        }
+
+        let (header, should_ratchet) = self.try_decrypt_header(&message.header)?;
+
         if should_ratchet {
-            // Ratchet step - DH key has changed
-            match self.dh_ratchet(&header) {
-                Err(err) => {
-                    self.state = old_state;
-                    return Err(err)?
-                }
-                _ => {}
-            };
+            self.skip_message_keys(header.previous_chain_length)?;
+            // Ratchet step - Rotate the keys
+            self.dh_ratchet(&header);
         }
 
         // Skip ahead if needed
@@ -336,14 +331,15 @@ impl DoubleRatchet {
             match self.skip_message_keys(header.message_number) {
                 Err(err) => {
                     self.state = old_state;
-                    return Err(err)?
+                    return Err(err);
                 }
                 _ => {}
-            };
+            }
         }
 
         // Current message key
         let message_key = self.state.receiving_chain.next();
+        self.state.receiving_message_number = self.state.receiving_message_number.wrapping_add(1);
 
         let plaintext = with_ad_buffer(|buffer| {
             buffer.extend_from_slice(ad);
@@ -354,8 +350,6 @@ impl DoubleRatchet {
             self.state = old_state;
             err
         })?;
-
-        self.state.receiving_message_number = self.state.receiving_message_number.wrapping_add(1);
 
         Ok(plaintext)
     }
@@ -399,7 +393,7 @@ impl DoubleRatchet {
     /// Tries to decrypt a header with both current and next header keys.
     ///
     /// This allows for recovery if a header key rotation has happened.
-    fn try_decrypt_header(&mut self, encrypted_header: &[u8]) -> Result<(MessageHeader, bool), Error> {
+    fn try_decrypt_header(&self, encrypted_header: &[u8]) -> Result<(MessageHeader, bool), Error> {
         if let Some(ref rhk) = self.state.receiving_header_key {
             if let Some(header) = self.decrypt_header(encrypted_header, rhk) {
                 return Ok((header, false));
@@ -443,8 +437,8 @@ impl DoubleRatchet {
     }
 
     /// Performs a Diffie-Hellman ratchet step.
-    fn dh_ratchet(&mut self, header: &MessageHeader) -> Result<(), Error> {
-        let seed = generate_random_seed()?;
+    fn dh_ratchet(&mut self, header: &MessageHeader) {
+        let seed = generate_random_seed();
 
         self.state.previous_sending_chain_length = self.state.sending_chain.index;
 
@@ -476,8 +470,6 @@ impl DoubleRatchet {
         self.state.root_key = new_root_key;
         self.state.sending_chain = Chain::new(chain_key);
         self.state.next_sending_header_key = next_header_key;
-
-        Ok(())
     }
 
     /// Generates and stores skipped message keys.
@@ -544,10 +536,10 @@ mod tests {
     use crate::SignedPreKey;
 
     fn create_ratchets() -> (DoubleRatchet, DoubleRatchet) {
-        let bob_spk = SignedPreKey::new(1).unwrap();
+        let bob_spk = SignedPreKey::new(1);
 
         // For simplicity, let's create a dummy shared secret
-        let shared_secret = generate_random_seed().unwrap();
+        let shared_secret = generate_random_seed();
 
         // Initialize ratchets
         let alice_ratchet = DoubleRatchet::initialize_for_alice(

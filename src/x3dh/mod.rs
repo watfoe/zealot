@@ -175,7 +175,7 @@ impl X3DH {
             .verify()
             .map_err(|_| Error::PreKey("Failed to verify pre-key bundle".to_string()))?;
 
-        let seed = generate_random_seed().map_err(|_| Error::Random)?;
+        let seed = generate_random_seed();
         let a_ephemeral = X25519Secret::from(seed);
 
         // DH1 = DH(IKa, SPKb)
@@ -264,10 +264,10 @@ mod tests {
 
     #[test]
     fn test_x3dh_key_agreement() {
-        let alice_identity = IdentityKey::new().unwrap();
-        let bob_identity = IdentityKey::new().unwrap();
-        let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
-        let bob_one_time_pre_key = OneTimePreKey::new(1).unwrap();
+        let alice_identity = IdentityKey::new();
+        let bob_identity = IdentityKey::new();
+        let bob_signed_pre_key = SignedPreKey::new(1);
+        let bob_one_time_pre_key = OneTimePreKey::new(1);
         let bob_bundle = X3DHPublicKeys::new(
             bob_identity.dh_key_public(),
             bob_identity.signing_key_public(),
@@ -280,7 +280,7 @@ mod tests {
         assert!(bob_bundle.verify().is_ok());
 
         // Create another bundle with different keys
-        let another_identity = IdentityKey::new().unwrap();
+        let another_identity = IdentityKey::new();
 
         // Try to create an invalid bundle (mixing keys)
         let invalid_bundle = X3DHPublicKeys::new(
@@ -332,9 +332,9 @@ mod tests {
 
     #[test]
     fn test_x3dh_agreement_without_one_time_key() {
-        let alice_identity = IdentityKey::new().unwrap();
-        let bob_identity = IdentityKey::new().unwrap();
-        let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
+        let alice_identity = IdentityKey::new();
+        let bob_identity = IdentityKey::new();
+        let bob_signed_pre_key = SignedPreKey::new(1);
         let bob_bundle = X3DHPublicKeys::new(
             bob_identity.dh_key_public(),
             bob_identity.signing_key_public(),

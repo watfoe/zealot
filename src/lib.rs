@@ -39,10 +39,10 @@
 //!     max_skipped_messages: 10,
 //!     protocol_info: b"com.example.secureapp".to_vec(),
 //! };
-//! let mut alice = Account::new(Some(config.clone())).unwrap();
+//! let mut alice = Account::new(Some(config.clone()));
 //!
 //! // Create Bob's account
-//! let mut bob = Account::new(Some(config)).unwrap(); // Use default config
+//! let mut bob = Account::new(Some(config)); // Use default config
 //!
 //! // Bob publishes his pre-key bundle
 //! let bob_bundle = bob.prekey_bundle();

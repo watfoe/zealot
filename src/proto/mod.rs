@@ -418,7 +418,7 @@ mod tests {
             max_spks: 20,
             protocol_info: b"Test-Protocol".to_vec(),
         };
-        let account = Account::new(Some(config)).unwrap();
+        let account = Account::new(Some(config));
 
         let serialized = account.serialize().unwrap();
         let deserialized = Account::deserialize(&serialized).unwrap();
@@ -495,8 +495,8 @@ mod tests {
 
     #[test]
     fn test_session_x3dh_keys_lifecycle() {
-        let alice_account = Account::new(None).unwrap();
-        let bob_account = Account::new(None).unwrap();
+        let alice_account = Account::new(None);
+        let bob_account = Account::new(None);
         let bob_bundle = bob_account.prekey_bundle();
         let bob_x3dh_keys = X3DHPublicKeys::from(&bob_bundle);
 
@@ -516,8 +516,8 @@ mod tests {
     }
 
     fn create_test_session_pair() -> (Session, Session) {
-        let alice_account = Account::new(None).unwrap();
-        let mut bob_account = Account::new(None).unwrap();
+        let alice_account = Account::new(None);
+        let mut bob_account = Account::new(None);
 
         let bob_bundle = bob_account.prekey_bundle();
         let bob_x3dh_keys = X3DHPublicKeys::from(&bob_bundle);
