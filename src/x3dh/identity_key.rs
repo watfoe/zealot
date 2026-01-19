@@ -1,4 +1,3 @@
-use crate::Error;
 use crate::{X25519PublicKey, X25519Secret};
 use ed25519_dalek::Signer;
 use ed25519_dalek::{SecretKey, SigningKey, ed25519};
@@ -8,12 +7,12 @@ use x25519_dalek::SharedSecret;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Generates a cryptographically secure random 32-byte seed.
-pub(crate) fn generate_random_seed() -> Result<Box<[u8; 32]>, Error> {
+pub(crate) fn generate_random_seed() -> Box<[u8; 32]> {
     let mut seed = Box::new([0u8; 32]);
     OsRng
         .try_fill_bytes(seed.as_mut_slice())
-        .map_err(|_| Error::Random)?;
-    Ok(seed)
+        .expect("Zealot: Random number generator should not fail");
+    seed
 }
 
 /// Long-term identity key pair that combines signing and key agreement capabilities.
@@ -28,15 +27,15 @@ pub struct IdentityKey {
 
 impl IdentityKey {
     /// Creates a new identity key with randomly generated components.
-    pub fn new() -> Result<Self, Error> {
-        let seed = generate_random_seed().map_err(|_| Error::Random)?;
+    pub fn new() -> Self {
+        let seed = generate_random_seed();
         let signing_key = Box::new(SigningKey::from(SecretKey::from(*seed)));
         let dh_key = X25519Secret::from(seed);
 
-        Ok(Self {
+        Self {
             signing_key,
             dh_key,
-        })
+        }
     }
 
     /// Signs a message using the Ed25519 signing key.
@@ -122,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_signing_and_verification() {
-        let identity_key = IdentityKey::new().unwrap();
+        let identity_key = IdentityKey::new();
         let message = b"This is a test message";
 
         let signature = identity_key.sign(message);
@@ -134,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_serialization_deserialization() {
-        let original_key = IdentityKey::new().unwrap();
+        let original_key = IdentityKey::new();
         let serialized = original_key.to_bytes();
 
         // Ensure serialized data has the expected length

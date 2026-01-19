@@ -14,8 +14,6 @@ use sha2::Sha256;
 use x25519_dalek::SharedSecret;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-const SALT: &[u8] = b"Zealot-E2E-NaCl";
-
 /// A shared secret derived from X3DH key agreement.
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct X3DHSharedSecret(pub(crate) Box<[u8; 32]>);
@@ -175,7 +173,7 @@ impl X3DH {
             .verify()
             .map_err(|_| Error::PreKey("Failed to verify pre-key bundle".to_string()))?;
 
-        let seed = generate_random_seed().map_err(|_| Error::Random)?;
+        let seed = generate_random_seed();
         let a_ephemeral = X25519Secret::from(seed);
 
         // DH1 = DH(IKa, SPKb)
@@ -236,17 +234,27 @@ impl X3DH {
         dh3: SharedSecret,
         dh4: Option<SharedSecret>,
     ) -> Result<X3DHSharedSecret, Error> {
-        // IKM = DH1 || DH2 || DH3 || DH4 (if available)
-        let mut key_material = Box::new([0u8; 128]);
+        // A byte sequence of 32 0xFF bytes if curve is X25519
+        const F: [u8; 32] = [0xFF; 32];
 
-        key_material[0..32].copy_from_slice(dh1.as_bytes());
-        key_material[32..64].copy_from_slice(dh2.as_bytes());
-        key_material[64..96].copy_from_slice(dh3.as_bytes());
-        if let Some(dh4) = dh4 {
-            key_material[96..128].copy_from_slice(dh4.as_bytes());
+        let salt = [0u8; 32];
+
+        // F (32) + DH1 (32) + DH2 (32) + DH3 (32) + optional DH4 (32)
+        let capacity = 32 + 32 + 32 + 32 + if dh4.is_some() { 32 } else { 0 };
+
+        // IKM = DH1 || DH2 || DH3 || DH4 (if available)
+        let mut key_material = Vec::with_capacity(capacity);
+
+        key_material.extend_from_slice(&F);
+        key_material.extend_from_slice(dh1.as_bytes());
+        key_material.extend_from_slice(dh2.as_bytes());
+        key_material.extend_from_slice(dh3.as_bytes());
+
+        if let Some(dh4_secret) = dh4 {
+            key_material.extend_from_slice(dh4_secret.as_bytes());
         }
 
-        let hkdf = Hkdf::<Sha256>::new(Some(SALT), &key_material.to_vec());
+        let hkdf = Hkdf::<Sha256>::new(Some(&salt), &key_material.to_vec());
         key_material.zeroize();
 
         let mut shared_secret = Box::new([0u8; 32]);
@@ -264,10 +272,10 @@ mod tests {
 
     #[test]
     fn test_x3dh_key_agreement() {
-        let alice_identity = IdentityKey::new().unwrap();
-        let bob_identity = IdentityKey::new().unwrap();
-        let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
-        let bob_one_time_pre_key = OneTimePreKey::new(1).unwrap();
+        let alice_identity = IdentityKey::new();
+        let bob_identity = IdentityKey::new();
+        let bob_signed_pre_key = SignedPreKey::new(1);
+        let bob_one_time_pre_key = OneTimePreKey::new(1);
         let bob_bundle = X3DHPublicKeys::new(
             bob_identity.dh_key_public(),
             bob_identity.signing_key_public(),
@@ -280,7 +288,7 @@ mod tests {
         assert!(bob_bundle.verify().is_ok());
 
         // Create another bundle with different keys
-        let another_identity = IdentityKey::new().unwrap();
+        let another_identity = IdentityKey::new();
 
         // Try to create an invalid bundle (mixing keys)
         let invalid_bundle = X3DHPublicKeys::new(
@@ -332,9 +340,9 @@ mod tests {
 
     #[test]
     fn test_x3dh_agreement_without_one_time_key() {
-        let alice_identity = IdentityKey::new().unwrap();
-        let bob_identity = IdentityKey::new().unwrap();
-        let bob_signed_pre_key = SignedPreKey::new(1).unwrap();
+        let alice_identity = IdentityKey::new();
+        let bob_identity = IdentityKey::new();
+        let bob_signed_pre_key = SignedPreKey::new(1);
         let bob_bundle = X3DHPublicKeys::new(
             bob_identity.dh_key_public(),
             bob_identity.signing_key_public(),

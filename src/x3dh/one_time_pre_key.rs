@@ -17,14 +17,12 @@ pub struct OneTimePreKey {
 
 impl OneTimePreKey {
     /// Creates a new one-time pre-key with the given ID.
-    pub fn new(id: u32) -> Result<Self, Error> {
-        let seed = generate_random_seed().map_err(|_| Error::Random)?;
-
-        Ok(Self {
-            pre_key: X25519Secret::from(seed),
+    pub fn new(id: u32) -> Self {
+        Self {
+            pre_key: X25519Secret::from(generate_random_seed()),
             id,
             used: false,
-        })
+        }
     }
 
     /// Returns the public component of this pre-key.
@@ -123,21 +121,18 @@ impl OneTimePreKeyStore {
     }
 
     /// Generates a specified number of new one-time pre-keys.
-    pub(crate) fn generate_keys(
-        &mut self,
-        count: usize,
-    ) -> Result<HashMap<u32, X25519PublicKey>, Error> {
+    pub(crate) fn generate_keys(&mut self, count: usize) -> HashMap<u32, X25519PublicKey> {
         let mut keys = HashMap::with_capacity(count);
         for _ in 0..count {
             let id = self.next_id;
-            let key = OneTimePreKey::new(id)?;
+            let key = OneTimePreKey::new(id);
             let key_public = key.public_key();
             self.next_id = self.next_id.wrapping_add(1);
             self.keys.insert(id, key);
             keys.insert(id, key_public);
         }
 
-        Ok(keys)
+        keys
     }
 
     /// Returns a map of all available pre-key IDs to their public keys.
@@ -161,7 +156,7 @@ impl OneTimePreKeyStore {
     }
 
     /// Generates additional pre-keys to maintain the desired pool size.
-    pub(crate) fn replenish(&mut self) -> Result<HashMap<u32, X25519PublicKey>, Error> {
+    pub(crate) fn replenish(&mut self) -> HashMap<u32, X25519PublicKey> {
         let needed = self.max_keys.saturating_sub(self.keys.len());
         self.generate_keys(needed)
     }
@@ -186,7 +181,7 @@ mod tests {
 
     #[test]
     fn test_one_time_pre_key_creation() {
-        let pre_key = OneTimePreKey::new(13).unwrap();
+        let pre_key = OneTimePreKey::new(13);
 
         assert_eq!(pre_key.id(), 13);
         assert!(!pre_key.is_used());
@@ -198,7 +193,7 @@ mod tests {
 
     #[test]
     fn test_one_time_pre_key_marking_as_used() {
-        let mut pre_key = OneTimePreKey::new(1).unwrap();
+        let mut pre_key = OneTimePreKey::new(1);
         assert!(!pre_key.is_used());
 
         pre_key.mark_as_used();
@@ -207,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_one_time_pre_key_serialization() {
-        let original_key = OneTimePreKey::new(123).unwrap();
+        let original_key = OneTimePreKey::new(123);
         let serialized = original_key.to_bytes();
 
         // Ensure we have enough bytes (4 for ID, 1 for used, 32 for key)
@@ -225,8 +220,8 @@ mod tests {
 
     #[test]
     fn test_one_time_pre_key_cannot_be_reused() {
-        let mut key = OneTimePreKey::new(1).unwrap();
-        let other_public = OneTimePreKey::new(2).unwrap().public_key();
+        let mut key = OneTimePreKey::new(1);
+        let other_public = OneTimePreKey::new(2).public_key();
 
         // Mark key as used
         key.mark_as_used();

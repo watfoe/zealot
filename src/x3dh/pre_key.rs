@@ -17,13 +17,11 @@ pub struct SignedPreKey {
 
 impl SignedPreKey {
     /// Creates a new signed pre-key with the given ID.
-    pub fn new(id: u32) -> Result<Self, Error> {
-        let seed = generate_random_seed().map_err(|_| Error::Random)?;
-
-        Ok(Self {
-            pre_key: X25519Secret::from(seed),
+    pub fn new(id: u32) -> Self {
+        Self {
+            pre_key: X25519Secret::from(generate_random_seed()),
             id,
-        })
+        }
     }
 
     /// Returns the public component of this signed pre-key.
@@ -104,24 +102,24 @@ pub struct SignedPreKeyStore {
 }
 
 impl SignedPreKeyStore {
-    pub(crate) fn new(max_keys: usize) -> Result<Self, Error> {
+    pub(crate) fn new(max_keys: usize) -> Self {
         let mut keys = HashMap::with_capacity(max_keys);
         let id = 1;
-        keys.insert(id, SignedPreKey::new(id)?);
+        keys.insert(id, SignedPreKey::new(id));
 
-        Ok(Self {
+        Self {
             keys,
             next_id: id + 1,
             max_keys,
-        })
+        }
     }
 
-    pub(crate) fn renew_key(&mut self) -> Result<(u32, &SignedPreKey), Error> {
+    pub(crate) fn renew_key(&mut self) -> (u32, &SignedPreKey) {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
-        self.keys.insert(id, SignedPreKey::new(id)?);
+        self.keys.insert(id, SignedPreKey::new(id));
 
-        Ok((id, self.get_current()))
+        (id, self.get_current())
     }
 
     pub(crate) fn get(&self, id: u32) -> Option<&SignedPreKey> {
@@ -155,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_signed_pre_key_creation() {
-        let pre_key = SignedPreKey::new(13).unwrap();
+        let pre_key = SignedPreKey::new(13);
 
         // Check the ID is set correctly
         assert_eq!(pre_key.id(), 13);
@@ -167,7 +165,7 @@ mod tests {
 
     #[test]
     fn test_pre_key_serialization() {
-        let original_key = SignedPreKey::new(21).unwrap();
+        let original_key = SignedPreKey::new(21);
         let serialized = original_key.to_bytes();
 
         // Ensure we have enough bytes (4 for ID, 32 for key)
@@ -184,8 +182,8 @@ mod tests {
 
     #[test]
     fn test_signature_consistency() {
-        let identity_key = IdentityKey::new().unwrap();
-        let pre_key = SignedPreKey::new(13).unwrap();
+        let identity_key = IdentityKey::new();
+        let pre_key = SignedPreKey::new(13);
 
         let signature1 = pre_key.signature(&identity_key);
         let signature2 = pre_key.signature(&identity_key);
