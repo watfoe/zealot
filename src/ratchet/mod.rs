@@ -151,9 +151,7 @@ impl DoubleRatchet {
         }
     }
 
-    fn derive_initial_header_keys(
-        root_key: &[u8; 32],
-    ) -> (Box<[u8; 32]>, Box<[u8; 32]>) {
+    fn derive_initial_header_keys(root_key: &[u8; 32]) -> (Box<[u8; 32]>, Box<[u8; 32]>) {
         let hkdf = Hkdf::<Sha256>::new(None, root_key);
 
         let mut header_key_a = Box::new([0u8; 32]);
@@ -309,7 +307,7 @@ impl DoubleRatchet {
         match self.try_skipped_message_keys(message, ad) {
             Ok(plaintext) => {
                 if let Some(plaintext) = plaintext {
-                    return Ok(plaintext)
+                    return Ok(plaintext);
                 }
             }
             Err(err) => {
@@ -374,7 +372,8 @@ impl DoubleRatchet {
         }
 
         if let Some((header_key, message_no)) = key {
-            let message_key = self.skipped_message_keys
+            let message_key = self
+                .skipped_message_keys
                 .remove(&(header_key.clone(), message_no))
                 .expect("Key must exist");
 

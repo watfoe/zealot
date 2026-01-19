@@ -121,10 +121,7 @@ impl OneTimePreKeyStore {
     }
 
     /// Generates a specified number of new one-time pre-keys.
-    pub(crate) fn generate_keys(
-        &mut self,
-        count: usize,
-    ) -> HashMap<u32, X25519PublicKey> {
+    pub(crate) fn generate_keys(&mut self, count: usize) -> HashMap<u32, X25519PublicKey> {
         let mut keys = HashMap::with_capacity(count);
         for _ in 0..count {
             let id = self.next_id;

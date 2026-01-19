@@ -4,9 +4,7 @@ mod session;
 pub use session::*;
 
 use crate::X25519PublicKey;
-use crate::{
-    DoubleRatchet, Error, IdentityKey, SignedPreKey, SignedPreKeyStore, X3DH, generate_random_seed,
-};
+use crate::{DoubleRatchet, Error, IdentityKey, SignedPreKey, SignedPreKeyStore, X3DH};
 use crate::{OneTimePreKeyStore, X3DHPublicKeys};
 use base64::Engine;
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -119,7 +117,7 @@ impl Account {
         );
 
         let session = Session::new(
-            session_id.clone(),
+            session_id,
             ratchet,
             Some(OutboundSessionX3DHKeys {
                 spk_id: bob_x3dh_public_keys.spk_public().0,
@@ -166,14 +164,14 @@ impl Account {
 
         let ratchet = DoubleRatchet::initialize_for_bob(
             shared_secret,
-            self.spk().key_pair(),
+            spk.key_pair(),
             self.config.max_skipped_messages,
         );
         let session_id = self.derive_session_id(
             alice_ik_public,
             &outbound_session_x3dhkeys.ephemeral_key_public,
         );
-        let session = Session::new(session_id.clone(), ratchet, None);
+        let session = Session::new(session_id, ratchet, None);
 
         Ok(session)
     }
@@ -215,11 +213,6 @@ impl Account {
         hasher.update(self.ik.dh_key_public().as_bytes());
         hasher.update(their_dh_public.as_bytes());
         hasher.update(ephemeral_key_public.as_bytes());
-
-        // Add randomness to prevent session ID collisions
-        let mut random = generate_random_seed();
-        hasher.update(random.as_slice());
-        random.zeroize();
 
         let bytes = hasher.finalize();
         let engine = base64::engine::general_purpose::STANDARD;
