@@ -1,4 +1,4 @@
-use crate::{Error, IdentityKey, generate_random_seed};
+use crate::{IdentityKey, generate_random_seed};
 use crate::{X25519PublicKey, X25519Secret};
 use ed25519_dalek::Signature;
 use std::collections::HashMap;

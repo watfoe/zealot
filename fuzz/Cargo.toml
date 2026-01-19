@@ -1,0 +1,9 @@
+[package]
+name = "zealot-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[dependencies]
+afl = "0.17.0"
+zealot = { path = ".." }
