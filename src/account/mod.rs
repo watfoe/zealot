@@ -74,7 +74,7 @@ impl Account {
             ik_public: ik.dh_key_public(),
             signing_key_public: ik.signing_key_public(),
             spk_public: (spk.id(), spk.public_key()),
-            signature: spk.signature(&ik),
+            signature: spk.signature(ik),
             otpks_public: self.otpk_store.public_keys(),
         }
     }
@@ -106,14 +106,20 @@ impl Account {
         let x3dh_result = X3DH::new(&self.config.protocol_info)
             .initiate_for_alice(&self.ik, bob_x3dh_public_keys)?;
 
-        let session_id =
-            self.derive_session_id(&bob_x3dh_public_keys.ik_public(), &x3dh_result.public_key());
+        let session_id = Self::derive_session_id(
+            &self.ik_public(),
+            &bob_x3dh_public_keys.ik_public(),
+            &x3dh_result.public_key(),
+        );
 
         let x3dh_pub_key = x3dh_result.public_key();
+        let ad = Self::derive_session_ad(&self.ik_public(), &bob_x3dh_public_keys.ik_public);
+
         let ratchet = DoubleRatchet::initialize_for_alice(
             x3dh_result.shared_secret(),
             &bob_x3dh_public_keys.spk_public().1,
             self.config.max_skipped_messages,
+            ad,
         );
 
         let session = Session::new(
@@ -154,6 +160,8 @@ impl Account {
             None
         };
 
+        let ad = Self::derive_session_ad(alice_ik_public, &self.ik_public());
+
         let shared_secret = X3DH::new(&self.config.protocol_info).initiate_for_bob(
             &self.ik,
             spk,
@@ -166,9 +174,11 @@ impl Account {
             shared_secret,
             spk.key_pair(),
             self.config.max_skipped_messages,
+            ad,
         );
-        let session_id = self.derive_session_id(
+        let session_id = Self::derive_session_id(
             alice_ik_public,
+            &self.ik_public(),
             &outbound_session_x3dhkeys.ephemeral_key_public,
         );
         let session = Session::new(session_id, ratchet, None);
@@ -203,21 +213,34 @@ impl Account {
     /// Uses SHA256 hash of the identity keys, ephemeral key, and additional
     /// randomness to prevent collisions.
     fn derive_session_id(
-        &self,
-        their_dh_public: &X25519PublicKey,
+        initiator_ik: &X25519PublicKey,
+        responder_ik: &X25519PublicKey,
         ephemeral_key_public: &X25519PublicKey,
     ) -> String {
         let mut hasher = Sha256::new();
 
-        // Include both identities and the ephemeral key
-        hasher.update(self.ik.dh_key_public().as_bytes());
-        hasher.update(their_dh_public.as_bytes());
+        hasher.update(initiator_ik.as_bytes());
+        hasher.update(responder_ik.as_bytes());
         hasher.update(ephemeral_key_public.as_bytes());
 
         let bytes = hasher.finalize();
         let engine = base64::engine::general_purpose::STANDARD;
 
         engine.encode(bytes)
+    }
+
+    fn derive_session_ad(
+        initiator_ik: &X25519PublicKey,
+        responder_ik: &X25519PublicKey,
+    ) -> Box<[u8; 64]> {
+        let mut temp = Vec::with_capacity(64);
+        temp.extend_from_slice(initiator_ik.as_bytes());
+        temp.extend_from_slice(responder_ik.as_bytes());
+
+        let mut ad = Box::new([0u8; 64]);
+        ad.copy_from_slice(&temp);
+
+        ad
     }
 }
 
@@ -286,6 +309,51 @@ mod tests {
         assert_ne!(
             initial_spk_id, new_spk_id,
             "Signed pre-key should have been rotated"
+        );
+    }
+
+    #[test]
+    fn test_session_consistency_and_identity_binding() {
+        let alice = Account::new(None);
+        let mut bob = Account::new(None);
+
+        let bob_bundle = bob.prekey_bundle();
+        let bob_public = X3DHPublicKeys::from(&bob_bundle);
+
+        let alice_session = alice.create_outbound_session(&bob_public).unwrap();
+
+        let alice_ik = alice.ik_public();
+        let x3dh_msg = alice_session
+            .x3dh_keys()
+            .expect("Alice should have X3DH keys");
+
+        let bob_session = bob.create_inbound_session(&alice_ik, &x3dh_msg).unwrap();
+
+        assert_eq!(
+            alice_session.session_id(),
+            bob_session.session_id(),
+            "Session IDs mismatch! Canonical ordering (Initiator vs Responder) is likely wrong."
+        );
+        println!("Session ID: {}", alice_session.session_id());
+
+        assert_eq!(
+            alice_session.ratchet.state.ad, bob_session.ratchet.state.ad,
+            "Associated Data (AD) mismatch! Identity Keys are not binding correctly."
+        );
+
+        let alice_bytes = alice.ik_public().to_bytes();
+        let bob_bytes = bob.ik_public().to_bytes();
+
+        let ad = alice_session.ratchet.state.ad;
+        assert_eq!(
+            &ad[0..32],
+            &alice_bytes,
+            "AD first half should be Initiator (Alice)"
+        );
+        assert_eq!(
+            &ad[32..64],
+            &bob_bytes,
+            "AD second half should be Responder (Bob)"
         );
     }
 }

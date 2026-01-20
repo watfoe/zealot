@@ -53,21 +53,13 @@ impl Session {
     }
 
     /// Encrypts a message using this session.
-    pub fn encrypt(
-        &mut self,
-        plaintext: &[u8],
-        associated_data: &[u8],
-    ) -> Result<RatchetMessage, Error> {
-        self.ratchet.encrypt(plaintext, associated_data)
+    pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<RatchetMessage, Error> {
+        self.ratchet.encrypt(plaintext)
     }
 
     /// Decrypts a message using this session.
-    pub fn decrypt(
-        &mut self,
-        message: &RatchetMessage,
-        associated_data: &[u8],
-    ) -> Result<Vec<u8>, Error> {
-        self.ratchet.decrypt(message, associated_data)
+    pub fn decrypt(&mut self, message: &RatchetMessage) -> Result<Vec<u8>, Error> {
+        self.ratchet.decrypt(message)
     }
 
     /// Marks this session as established end-to-end.
@@ -95,92 +87,3 @@ impl Zeroize for Session {
 }
 
 impl ZeroizeOnDrop for Session {}
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        DoubleRatchet, IdentityKey, OneTimePreKey, OutboundSessionX3DHKeys, Session, SignedPreKey,
-        X3DH, X3DHPublicKeys,
-    };
-
-    #[test]
-    fn test_session() {
-        let alice_identity = IdentityKey::new();
-        let bob_identity = IdentityKey::new();
-        let bob_signed_pre_key = SignedPreKey::new(1);
-        let bob_one_time_pre_key = OneTimePreKey::new(1);
-        let bob_bundle = X3DHPublicKeys::new(
-            bob_identity.dh_key_public(),
-            bob_identity.signing_key_public(),
-            bob_signed_pre_key.signature(&bob_identity),
-            (bob_signed_pre_key.id(), bob_signed_pre_key.public_key()),
-            Some((bob_one_time_pre_key.id(), bob_one_time_pre_key.public_key())),
-        );
-
-        // Alice performs X3DH with Bob's bundle
-        let x3dh = X3DH::new(b"Protocol");
-        let x3dh_result = x3dh
-            .initiate_for_alice(&alice_identity, &bob_bundle)
-            .unwrap();
-
-        let x3dh_ephemeral_public = x3dh_result.public_key();
-        // Alice initializes her Double Ratchet
-        let alice_ratchet = DoubleRatchet::initialize_for_alice(
-            x3dh_result.shared_secret(),
-            &bob_bundle.spk_public().1,
-            10,
-        );
-
-        // Create a session ID for Alice
-        let alice_session_id = "alice-to-bob".to_string();
-        let mut alice_session = Session::new(
-            alice_session_id,
-            alice_ratchet,
-            Some(OutboundSessionX3DHKeys {
-                spk_id: 1,
-                ephemeral_key_public: x3dh_ephemeral_public,
-                otpk_id: Some(1),
-            }),
-        );
-
-        // Bob processes Alice's initiation
-        let bob_shared_secret = x3dh
-            .initiate_for_bob(
-                &bob_identity,
-                &bob_signed_pre_key,
-                Some(bob_one_time_pre_key),
-                &alice_identity.dh_key_public(),
-                &x3dh_ephemeral_public,
-            )
-            .unwrap();
-
-        // Bob initializes his Double Ratchet
-        let bob_ratchet =
-            DoubleRatchet::initialize_for_bob(bob_shared_secret, bob_signed_pre_key.key_pair(), 10);
-
-        // Create a session ID for Bob
-        let bob_session_id = "bob-to-alice".to_string();
-        let mut bob_session = Session::new(bob_session_id, bob_ratchet, None);
-
-        // Alice encrypts a message for Bob
-        let message = "Hello Bob, this is a secure message!";
-        let associated_data = b"session-1";
-        let erm = alice_session
-            .encrypt(message.as_bytes(), associated_data)
-            .unwrap();
-
-        // Bob decrypts Alice's message
-        let decrypted = bob_session.decrypt(&erm, associated_data).unwrap();
-        assert_eq!(String::from_utf8(decrypted).unwrap(), message);
-
-        // Bob responds to Alice
-        let response = "Hello Alice, I received your message!";
-        let erm = bob_session
-            .encrypt(response.as_bytes(), associated_data)
-            .unwrap();
-
-        // Alice decrypts Bob's response
-        let decrypted_response = alice_session.decrypt(&erm, associated_data).unwrap();
-        assert_eq!(String::from_utf8(decrypted_response).unwrap(), response);
-    }
-}

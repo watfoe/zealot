@@ -61,12 +61,11 @@
 //!
 //! // Alice encrypts a message
 //! let message = "Hello Bob! This is a secure message.";
-//! let associated_data = b"message-id-12345";
-//! let encrypted_message = alice_session.encrypt(message.as_bytes(), associated_data)
+//! let encrypted_message = alice_session.encrypt(message.as_bytes())
 //!     .expect("Encryption failed");
 //!
 //! // Bob decrypts the message
-//! let decrypted_message = bob_session.decrypt(&encrypted_message, associated_data)
+//! let decrypted_message = bob_session.decrypt(&encrypted_message)
 //!     .expect("Decryption failed");
 //!
 //! assert_eq!(String::from_utf8(decrypted_message).unwrap(), message);

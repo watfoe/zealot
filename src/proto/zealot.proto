@@ -78,6 +78,7 @@ message RatchetStateProto {
     bytes receiving_header_key = 9;
     bytes next_sending_header_key = 10;
     bytes next_receiving_header_key = 11;
+    bytes ad = 12;
 }
 
 message ChainProto {
