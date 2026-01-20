@@ -29,15 +29,10 @@ mod integration_tests {
 
         println!("Step 6: Alice sends first message...");
         let alice_message_1 = "Hey Bob, this is a secure message!";
-        let alice_ad_1 = b"Alice->Bob:1";
-        let encrypted_message_1 = alice_session
-            .encrypt(alice_message_1.as_bytes(), alice_ad_1)
-            .unwrap();
+        let encrypted_message_1 = alice_session.encrypt(alice_message_1.as_bytes()).unwrap();
 
         println!("Step 7: Bob decrypts Alice's first message...");
-        let decrypted_message_1 = bob_session
-            .decrypt(&encrypted_message_1, alice_ad_1)
-            .unwrap();
+        let decrypted_message_1 = bob_session.decrypt(&encrypted_message_1).unwrap();
         assert_eq!(
             String::from_utf8(decrypted_message_1).unwrap(),
             alice_message_1
@@ -45,13 +40,10 @@ mod integration_tests {
 
         println!("Step 8: Bob replies to Alice...");
         let bob_message_1 = "Hi Alice! I received your secure message.";
-        let bob_ad_1 = b"Bob->Alice:1";
-        let encrypted_reply_1 = bob_session
-            .encrypt(bob_message_1.as_bytes(), bob_ad_1)
-            .unwrap();
+        let encrypted_reply_1 = bob_session.encrypt(bob_message_1.as_bytes()).unwrap();
 
         println!("Step 9: Alice decrypts Bob's reply...");
-        let decrypted_reply_1 = alice_session.decrypt(&encrypted_reply_1, bob_ad_1).unwrap();
+        let decrypted_reply_1 = alice_session.decrypt(&encrypted_reply_1).unwrap();
         assert_eq!(String::from_utf8(decrypted_reply_1).unwrap(), bob_message_1);
 
         println!("Step 10: Testing session serialization and restoration...");
@@ -63,14 +55,9 @@ mod integration_tests {
 
         println!("Step 11: Testing continued communication after restoration...");
         let alice_message_2 = "How's the weather there?";
-        let alice_ad_2 = b"Alice->Bob:2";
-        let encrypted_message_2 = alice_restored
-            .encrypt(alice_message_2.as_bytes(), alice_ad_2)
-            .unwrap();
+        let encrypted_message_2 = alice_restored.encrypt(alice_message_2.as_bytes()).unwrap();
 
-        let decrypted_message_2 = bob_restored
-            .decrypt(&encrypted_message_2, alice_ad_2)
-            .unwrap();
+        let decrypted_message_2 = bob_restored.decrypt(&encrypted_message_2).unwrap();
         assert_eq!(
             String::from_utf8(decrypted_message_2).unwrap(),
             alice_message_2
@@ -82,77 +69,41 @@ mod integration_tests {
             "Message B - should be received first",
             "Message C - should be received second",
         ];
-        let alice_ads = vec![b"Alice->Bob:3", b"Alice->Bob:4", b"Alice->Bob:5"];
         let mut encrypted_messages = Vec::new();
 
         for (i, msg) in alice_messages.iter().enumerate() {
-            encrypted_messages.push(
-                alice_restored
-                    .encrypt(msg.as_bytes(), alice_ads[i])
-                    .unwrap(),
-            );
+            encrypted_messages.push(alice_restored.encrypt(msg.as_bytes()).unwrap());
         }
 
         // Bob receives them out of order: B, C, A
-        let decrypted_b = bob_restored
-            .decrypt(&encrypted_messages[1], alice_ads[1])
-            .unwrap();
+        let decrypted_b = bob_restored.decrypt(&encrypted_messages[1]).unwrap();
         assert_eq!(String::from_utf8(decrypted_b).unwrap(), alice_messages[1]);
 
-        let decrypted_c = bob_restored
-            .decrypt(&encrypted_messages[2], alice_ads[2])
-            .unwrap();
+        let decrypted_c = bob_restored.decrypt(&encrypted_messages[2]).unwrap();
         assert_eq!(String::from_utf8(decrypted_c).unwrap(), alice_messages[2]);
 
-        let decrypted_a = bob_restored
-            .decrypt(&encrypted_messages[0], alice_ads[0])
-            .unwrap();
+        let decrypted_a = bob_restored.decrypt(&encrypted_messages[0]).unwrap();
         assert_eq!(String::from_utf8(decrypted_a).unwrap(), alice_messages[0]);
 
         println!("Step 13: Testing multiple DH ratchet rotations...");
         for i in 0..3 {
             // Bob to Alice
             let bob_msg = format!("Rotation test from Bob {}", i);
-            let bob_ad = format!("Bob->Alice:{}", i + 2).into_bytes();
-            let encrypted = bob_restored.encrypt(bob_msg.as_bytes(), &bob_ad).unwrap();
-            let decrypted = alice_restored.decrypt(&encrypted, &bob_ad).unwrap();
+            let encrypted = bob_restored.encrypt(bob_msg.as_bytes()).unwrap();
+            let decrypted = alice_restored.decrypt(&encrypted).unwrap();
             assert_eq!(String::from_utf8(decrypted).unwrap(), bob_msg);
 
             // Alice to Bob
             let alice_msg = format!("Rotation test from Alice {}", i);
-            let alice_ad = format!("Alice->Bob:{}", i + 6).into_bytes();
-            let encrypted = alice_restored
-                .encrypt(alice_msg.as_bytes(), &alice_ad)
-                .unwrap();
-            let decrypted = bob_restored.decrypt(&encrypted, &alice_ad).unwrap();
+            let encrypted = alice_restored.encrypt(alice_msg.as_bytes()).unwrap();
+            let decrypted = bob_restored.decrypt(&encrypted).unwrap();
             assert_eq!(String::from_utf8(decrypted).unwrap(), alice_msg);
         }
 
-        println!("Step 14: Testing with different associated data...");
-        let alice_message_diff_ad = "This message has different AD";
-        let alice_ad_diff = b"Different-AD";
-        let encrypted_diff_ad = alice_restored
-            .encrypt(alice_message_diff_ad.as_bytes(), alice_ad_diff)
-            .unwrap();
-
-        // Trying to decrypt with wrong AD should fail
-        let wrong_ad_result = bob_restored.decrypt(&encrypted_diff_ad, b"Wrong-AD");
-        assert!(wrong_ad_result.is_err());
-
-        // Decrypting with correct AD should work
-        let correct_ad_result = bob_restored
-            .decrypt(&encrypted_diff_ad, alice_ad_diff)
-            .unwrap();
-        assert_eq!(
-            String::from_utf8(correct_ad_result).unwrap(),
-            alice_message_diff_ad
-        );
-
         println!("Step 15: Testing large message...");
         let large_message = vec![b'X'; 100 * 1024]; // 100 KB
-        let large_ad = b"Large-Message";
-        let encrypted_large = alice_restored.encrypt(&large_message, large_ad).unwrap();
-        let decrypted_large = bob_restored.decrypt(&encrypted_large, large_ad).unwrap();
+        let encrypted_large = alice_restored.encrypt(&large_message).unwrap();
+        let decrypted_large = bob_restored.decrypt(&encrypted_large).unwrap();
         assert_eq!(decrypted_large, large_message);
 
         println!("All integration tests passed successfully!");
@@ -195,18 +146,14 @@ mod integration_tests {
         let bob_message = "Hey Bob, it's Alice!";
         let charlie_message = "Hey Charlie, it's Alice!";
 
-        let encrypted_bob = alice_bob_session
-            .encrypt(bob_message.as_bytes(), b"Alice->Bob")
-            .unwrap();
+        let encrypted_bob = alice_bob_session.encrypt(bob_message.as_bytes()).unwrap();
         let encrypted_charlie = alice_charlie_session
-            .encrypt(charlie_message.as_bytes(), b"Alice->Charlie")
+            .encrypt(charlie_message.as_bytes())
             .unwrap();
 
         println!("Bob and Charlie decrypt messages...");
-        let decrypted_bob = bob_session.decrypt(&encrypted_bob, b"Alice->Bob").unwrap();
-        let decrypted_charlie = charlie_session
-            .decrypt(&encrypted_charlie, b"Alice->Charlie")
-            .unwrap();
+        let decrypted_bob = bob_session.decrypt(&encrypted_bob).unwrap();
+        let decrypted_charlie = charlie_session.decrypt(&encrypted_charlie).unwrap();
 
         assert_eq!(String::from_utf8(decrypted_bob).unwrap(), bob_message);
         assert_eq!(
@@ -218,19 +165,13 @@ mod integration_tests {
         let bob_reply = "Hi Alice, it's Bob!";
         let charlie_reply = "Hey Alice, Charlie here!";
 
-        let encrypted_bob_reply = bob_session
-            .encrypt(bob_reply.as_bytes(), b"Bob->Alice")
-            .unwrap();
-        let encrypted_charlie_reply = charlie_session
-            .encrypt(charlie_reply.as_bytes(), b"Charlie->Alice")
-            .unwrap();
+        let encrypted_bob_reply = bob_session.encrypt(bob_reply.as_bytes()).unwrap();
+        let encrypted_charlie_reply = charlie_session.encrypt(charlie_reply.as_bytes()).unwrap();
 
         println!("Alice decrypts responses...");
-        let decrypted_bob_reply = alice_bob_session
-            .decrypt(&encrypted_bob_reply, b"Bob->Alice")
-            .unwrap();
+        let decrypted_bob_reply = alice_bob_session.decrypt(&encrypted_bob_reply).unwrap();
         let decrypted_charlie_reply = alice_charlie_session
-            .decrypt(&encrypted_charlie_reply, b"Charlie->Alice")
+            .decrypt(&encrypted_charlie_reply)
             .unwrap();
 
         assert_eq!(String::from_utf8(decrypted_bob_reply).unwrap(), bob_reply);
@@ -251,18 +192,14 @@ mod integration_tests {
         let final_charlie_msg = "Final message to Charlie";
 
         let encrypted_final_bob = alice_bob_restored
-            .encrypt(final_bob_msg.as_bytes(), b"Alice->Bob:Final")
+            .encrypt(final_bob_msg.as_bytes())
             .unwrap();
         let encrypted_final_charlie = alice_charlie_restored
-            .encrypt(final_charlie_msg.as_bytes(), b"Alice->Charlie:Final")
+            .encrypt(final_charlie_msg.as_bytes())
             .unwrap();
 
-        let decrypted_final_bob = bob_session
-            .decrypt(&encrypted_final_bob, b"Alice->Bob:Final")
-            .unwrap();
-        let decrypted_final_charlie = charlie_session
-            .decrypt(&encrypted_final_charlie, b"Alice->Charlie:Final")
-            .unwrap();
+        let decrypted_final_bob = bob_session.decrypt(&encrypted_final_bob).unwrap();
+        let decrypted_final_charlie = charlie_session.decrypt(&encrypted_final_charlie).unwrap();
 
         assert_eq!(
             String::from_utf8(decrypted_final_bob).unwrap(),
@@ -298,20 +235,14 @@ mod integration_tests {
         for i in 0..3 {
             // Alice to Bob
             let msg = format!("Message {}", i);
-            let encrypted = alice_session
-                .encrypt(msg.as_bytes(), b"Alice->Bob")
-                .unwrap();
-            let decrypted = bob_session.decrypt(&encrypted, b"Alice->Bob").unwrap();
+            let encrypted = alice_session.encrypt(msg.as_bytes()).unwrap();
+            let decrypted = bob_session.decrypt(&encrypted).unwrap();
             assert_eq!(String::from_utf8(decrypted).unwrap(), msg);
 
             // Bob to Alice
             let reply = format!("Reply {}", i);
-            let encrypted_reply = bob_session
-                .encrypt(reply.as_bytes(), b"Bob->Alice")
-                .unwrap();
-            let decrypted_reply = alice_session
-                .decrypt(&encrypted_reply, b"Bob->Alice")
-                .unwrap();
+            let encrypted_reply = bob_session.encrypt(reply.as_bytes()).unwrap();
+            let decrypted_reply = alice_session.decrypt(&encrypted_reply).unwrap();
             assert_eq!(String::from_utf8(decrypted_reply).unwrap(), reply);
         }
 
@@ -336,12 +267,10 @@ mod integration_tests {
         println!("Testing resumed communication...");
         let resumption_message = "Hey Bob, I'm reconnecting with you!";
         let encrypted_resumption = alice_new_session
-            .encrypt(resumption_message.as_bytes(), b"Alice->Bob:New")
+            .encrypt(resumption_message.as_bytes())
             .unwrap();
 
-        let decrypted_resumption = bob_new_session
-            .decrypt(&encrypted_resumption, b"Alice->Bob:New")
-            .unwrap();
+        let decrypted_resumption = bob_new_session.decrypt(&encrypted_resumption).unwrap();
 
         assert_eq!(
             String::from_utf8(decrypted_resumption).unwrap(),
@@ -350,12 +279,10 @@ mod integration_tests {
 
         let bob_welcome_back = "Welcome back, Alice!";
         let encrypted_welcome = bob_new_session
-            .encrypt(bob_welcome_back.as_bytes(), b"Bob->Alice:New")
+            .encrypt(bob_welcome_back.as_bytes())
             .unwrap();
 
-        let decrypted_welcome = alice_new_session
-            .decrypt(&encrypted_welcome, b"Bob->Alice:New")
-            .unwrap();
+        let decrypted_welcome = alice_new_session.decrypt(&encrypted_welcome).unwrap();
 
         assert_eq!(
             String::from_utf8(decrypted_welcome).unwrap(),
@@ -411,12 +338,12 @@ mod integration_tests {
 
             // Restore Alice's session, encrypt, then serialize
             let mut alice_restored = Session::deserialize(&alice_session_data).unwrap();
-            let encrypted = alice_restored.encrypt(msg.as_bytes(), b"test").unwrap();
+            let encrypted = alice_restored.encrypt(msg.as_bytes()).unwrap();
             alice_session_data = alice_restored.serialize().unwrap();
 
             // Restore Bob's session, decrypt, then serialize
             let mut bob_restored = Session::deserialize(&bob_session_data).unwrap();
-            let decrypted = bob_restored.decrypt(&encrypted, b"test").unwrap();
+            let decrypted = bob_restored.decrypt(&encrypted).unwrap();
             bob_session_data = bob_restored.serialize().unwrap();
 
             assert_eq!(String::from_utf8(decrypted).unwrap(), *msg);

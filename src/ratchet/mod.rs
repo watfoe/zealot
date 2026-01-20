@@ -82,6 +82,7 @@ impl DoubleRatchet {
         mut shared_secret: X3DHSharedSecret,
         bob_public_key: &X25519PublicKey,
         max_skipped_messages: u32,
+        ad: Box<[u8; 64]>,
     ) -> Self {
         let seed = generate_random_seed();
         let dh_pair = X25519Secret::from(seed);
@@ -101,6 +102,7 @@ impl DoubleRatchet {
 
         Self {
             state: RatchetState {
+                ad,
                 root_key: new_root_key,
                 dh_pair,
                 remote_dh_key_public: Some(*bob_public_key),
@@ -127,12 +129,14 @@ impl DoubleRatchet {
         shared_secret: X3DHSharedSecret,
         dh_pair: X25519Secret,
         max_skipped_messages: u32,
+        ad: Box<[u8; 64]>,
     ) -> Self {
         let (header_key_a, next_header_key_b) =
             DoubleRatchet::derive_initial_header_keys(&shared_secret.0);
 
         Self {
             state: RatchetState {
+                ad,
                 root_key: shared_secret.0.clone(),
                 dh_pair,
                 remote_dh_key_public: None,
@@ -207,7 +211,7 @@ impl DoubleRatchet {
     /// 2. Encrypts the message header with the header key
     /// 3. Encrypts the message with the message key
     /// 4. Increments the sending chain message counter
-    pub fn encrypt(&mut self, plaintext: &[u8], ad: &[u8]) -> Result<RatchetMessage, Error> {
+    pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<RatchetMessage, Error> {
         let header = MessageHeader {
             public_key: self.public_key(),
             previous_chain_length: self.state.previous_sending_chain_length,
@@ -217,7 +221,7 @@ impl DoubleRatchet {
 
         let message_key = self.state.sending_chain.next();
         let ciphertext = with_ad_buffer(|buffer| {
-            buffer.extend_from_slice(ad);
+            buffer.extend_from_slice(self.state.ad.as_slice());
             buffer.extend_from_slice(&encrypted_header);
             Self::encrypt_message(&message_key, plaintext, buffer)
         })?;
@@ -232,7 +236,7 @@ impl DoubleRatchet {
 
     /// Encrypts a message header.
     fn encrypt_header(&self, header: &MessageHeader) -> Result<Vec<u8>, Error> {
-        if let Some(hk) = self.state.sending_header_key.clone() {
+        if let Some(ref hk) = self.state.sending_header_key {
             let header_bytes = header.to_bytes();
 
             let mut nonce_slice = Box::new([0u8; 12]);
@@ -240,9 +244,9 @@ impl DoubleRatchet {
                 .try_fill_bytes(nonce_slice.as_mut_slice())
                 .map_err(|_| Error::Random)?;
 
-            let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(&hk.as_slice());
+            let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(hk.as_slice());
             let cipher = Aes256GcmSiv::new(key);
-            let nonce = Nonce::from_slice(&nonce_slice.as_slice());
+            let nonce = Nonce::from_slice(nonce_slice.as_slice());
 
             let mut ciphertext = cipher
                 .encrypt(nonce, header_bytes.as_ref())
@@ -264,21 +268,18 @@ impl DoubleRatchet {
 
     /// Encrypt a message
     fn encrypt_message(key: &[u8; 32], plaintext: &[u8], ad: &[u8]) -> Result<Vec<u8>, Error> {
-        // Derive encryption key, authentication key, and IV from the message key
+        // Derive encryption key and IV from the message key
         let hkdf = Hkdf::<Sha256>::new(None, key);
 
-        // Generate 80 bytes: 32 for encryption key, 32 for auth key, 16 for IV
-        let mut derived_material = [0u8; 80];
+        let mut derived_material = [0u8; 44];
         hkdf.expand(b"Zealot-E2E-Keys", &mut derived_material)
             .expect("HKDF expansion failed");
 
-        // Extract the nonce (use first 12 bytes of the IV)
-        let mut nonce_bytes = [0u8; NONCE_SIZE];
-        nonce_bytes.copy_from_slice(&derived_material[64..64 + NONCE_SIZE]);
-
-        // Use the encryption key for AES-GCM
         let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(&derived_material[0..32]);
         let cipher = Aes256GcmSiv::new(key);
+
+        let mut nonce_bytes = [0u8; NONCE_SIZE];
+        nonce_bytes.copy_from_slice(&derived_material[32..44]);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         cipher
@@ -300,11 +301,11 @@ impl DoubleRatchet {
     /// 3. Performs a DH ratchet step if needed
     /// 4. Generates any skipped message keys
     /// 5. Derives the message key and decrypts the message
-    pub fn decrypt(&mut self, message: &RatchetMessage, ad: &[u8]) -> Result<Vec<u8>, Error> {
+    pub fn decrypt(&mut self, message: &RatchetMessage) -> Result<Vec<u8>, Error> {
         // Clone the state so that if the decryption fails, we revert back to the old state
         let old_state = self.state.clone();
 
-        match self.try_skipped_message_keys(message, ad) {
+        match self.try_skipped_message_keys(message) {
             Ok(plaintext) => {
                 if let Some(plaintext) = plaintext {
                     return Ok(plaintext);
@@ -326,12 +327,9 @@ impl DoubleRatchet {
 
         // Skip ahead if needed
         if header.message_number > self.state.receiving_message_number {
-            match self.skip_message_keys(header.message_number) {
-                Err(err) => {
-                    self.state = old_state;
-                    return Err(err);
-                }
-                _ => {}
+            if let Err(err) = self.skip_message_keys(header.message_number) {
+                self.state = old_state;
+                return Err(err);
             }
         }
 
@@ -340,13 +338,12 @@ impl DoubleRatchet {
         self.state.receiving_message_number = self.state.receiving_message_number.wrapping_add(1);
 
         let plaintext = with_ad_buffer(|buffer| {
-            buffer.extend_from_slice(ad);
+            buffer.extend_from_slice(self.state.ad.as_slice());
             buffer.extend_from_slice(&message.header);
             Self::decrypt_message(&message_key, &message.ciphertext, buffer)
         })
-        .map_err(|err| {
+        .inspect_err(|_| {
             self.state = old_state;
-            err
         })?;
 
         Ok(plaintext)
@@ -358,14 +355,13 @@ impl DoubleRatchet {
     fn try_skipped_message_keys(
         &mut self,
         message: &RatchetMessage,
-        ad: &[u8],
     ) -> Result<Option<Vec<u8>>, Error> {
         let mut key = None;
 
-        for ((header_key, message_no), _) in &self.skipped_message_keys {
-            if let Some(header) = self.decrypt_header(&message.header, &header_key) {
+        for (header_key, message_no) in self.skipped_message_keys.keys() {
+            if let Some(header) = self.decrypt_header(&message.header, header_key) {
                 if header.message_number == *message_no {
-                    key = Some((header_key.clone(), *message_no));
+                    key = Some((header_key, *message_no));
                     break;
                 }
             }
@@ -378,7 +374,7 @@ impl DoubleRatchet {
                 .expect("Key must exist");
 
             let plaintext = with_ad_buffer(|buffer| {
-                buffer.extend_from_slice(ad);
+                buffer.extend_from_slice(self.state.ad.as_slice());
                 buffer.extend_from_slice(&message.header);
                 Self::decrypt_message(&message_key, &message.ciphertext, buffer)
             })?;
@@ -499,23 +495,19 @@ impl DoubleRatchet {
     }
 
     /// Decrypt a message
-    fn decrypt_message(
-        key: &Box<[u8; 32]>,
-        ciphertext: &[u8],
-        ad: &[u8],
-    ) -> Result<Vec<u8>, Error> {
+    fn decrypt_message(key: &[u8; 32], ciphertext: &[u8], ad: &[u8]) -> Result<Vec<u8>, Error> {
         let hkdf = Hkdf::<Sha256>::new(None, key.as_slice());
 
-        let mut derived_material = [0u8; 80];
+        let mut derived_material = [0u8; 44];
         hkdf.expand(b"Zealot-E2E-Keys", &mut derived_material)
             .expect("HKDF expansion failed");
 
-        let mut nonce_bytes = [0u8; NONCE_SIZE];
-        nonce_bytes.copy_from_slice(&derived_material[64..64 + NONCE_SIZE]);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
         let aes_key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(&derived_material[0..32]);
         let cipher = Aes256GcmSiv::new(aes_key);
+
+        let mut nonce_bytes = [0u8; NONCE_SIZE];
+        nonce_bytes.copy_from_slice(&derived_material[32..44]);
+        let nonce = Nonce::from_slice(&nonce_bytes);
 
         cipher
             .decrypt(
@@ -533,6 +525,7 @@ impl DoubleRatchet {
 mod tests {
     use super::*;
     use crate::SignedPreKey;
+    use rand::rand_core::OsRng;
 
     fn create_ratchets() -> (DoubleRatchet, DoubleRatchet) {
         let bob_spk = SignedPreKey::new(1);
@@ -540,17 +533,22 @@ mod tests {
         // For simplicity, let's create a dummy shared secret
         let shared_secret = generate_random_seed();
 
+        let mut ad = Box::new([0u8; 64]);
+        OsRng.try_fill_bytes(ad.as_mut_slice()).unwrap();
+
         // Initialize ratchets
         let alice_ratchet = DoubleRatchet::initialize_for_alice(
             X3DHSharedSecret(shared_secret.clone()),
             &bob_spk.public_key(),
             20,
+            ad.clone(),
         );
 
         let bob_ratchet = DoubleRatchet::initialize_for_bob(
             X3DHSharedSecret(shared_secret),
             bob_spk.key_pair(),
             20,
+            ad,
         );
 
         (alice_ratchet, bob_ratchet)
@@ -562,20 +560,18 @@ mod tests {
 
         // Send a message from Alice to Bob
         let alice_message = "Hello, Bob!";
-        let encrypted_message = alice_ratchet
-            .encrypt(alice_message.as_bytes(), b"AD")
-            .unwrap();
+        let encrypted_message = alice_ratchet.encrypt(alice_message.as_bytes()).unwrap();
 
         // Bob decrypts Alice's message
-        let decrypted = bob_ratchet.decrypt(&encrypted_message, b"AD").unwrap();
+        let decrypted = bob_ratchet.decrypt(&encrypted_message).unwrap();
         assert_eq!(String::from_utf8(decrypted).unwrap(), alice_message);
 
         // Bob responds to Alice
         let bob_message = "Hello, Alice!";
-        let encrypted_response = bob_ratchet.encrypt(bob_message.as_bytes(), b"AD").unwrap();
+        let encrypted_response = bob_ratchet.encrypt(bob_message.as_bytes()).unwrap();
 
         // Alice decrypts Bob's response
-        let decrypted_response = alice_ratchet.decrypt(&encrypted_response, b"AD").unwrap();
+        let decrypted_response = alice_ratchet.decrypt(&encrypted_response).unwrap();
         assert_eq!(String::from_utf8(decrypted_response).unwrap(), bob_message);
     }
 
@@ -593,8 +589,8 @@ mod tests {
         ];
 
         for msg in &messages {
-            let encrypted = alice_ratchet.encrypt(msg.as_bytes(), b"AD").unwrap();
-            let decrypted = bob_ratchet.decrypt(&encrypted, b"AD").unwrap();
+            let encrypted = alice_ratchet.encrypt(msg.as_bytes()).unwrap();
+            let decrypted = bob_ratchet.decrypt(&encrypted).unwrap();
             assert_eq!(String::from_utf8(decrypted).unwrap(), *msg);
         }
 
@@ -602,8 +598,8 @@ mod tests {
         let responses = vec!["Response 1", "Response 2", "Response 3"];
 
         for msg in &responses {
-            let encrypted = bob_ratchet.encrypt(msg.as_bytes(), b"AD").unwrap();
-            let decrypted = alice_ratchet.decrypt(&encrypted, b"AD").unwrap();
+            let encrypted = bob_ratchet.encrypt(msg.as_bytes()).unwrap();
+            let decrypted = alice_ratchet.decrypt(&encrypted).unwrap();
             assert_eq!(String::from_utf8(decrypted).unwrap(), *msg);
         }
     }
@@ -623,33 +619,23 @@ mod tests {
         let mut encrypted_messages = Vec::new();
 
         for msg in &messages {
-            encrypted_messages.push(alice_ratchet.encrypt(msg.as_bytes(), b"AD").unwrap());
+            encrypted_messages.push(alice_ratchet.encrypt(msg.as_bytes()).unwrap());
         }
 
         // Bob receives them out of order: 0, 2, 1, 4, 3
-        let decrypted1 = bob_ratchet
-            .decrypt(&encrypted_messages[0].clone(), b"AD")
-            .unwrap();
+        let decrypted1 = bob_ratchet.decrypt(&encrypted_messages[0].clone()).unwrap();
         assert_eq!(String::from_utf8(decrypted1).unwrap(), messages[0]);
 
-        let decrypted3 = bob_ratchet
-            .decrypt(&encrypted_messages[2].clone(), b"AD")
-            .unwrap();
+        let decrypted3 = bob_ratchet.decrypt(&encrypted_messages[2].clone()).unwrap();
         assert_eq!(String::from_utf8(decrypted3).unwrap(), messages[2]);
 
-        let decrypted5 = bob_ratchet
-            .decrypt(&encrypted_messages[4].clone(), b"AD")
-            .unwrap();
+        let decrypted5 = bob_ratchet.decrypt(&encrypted_messages[4].clone()).unwrap();
         assert_eq!(String::from_utf8(decrypted5).unwrap(), messages[4]);
 
-        let decrypted2 = bob_ratchet
-            .decrypt(&encrypted_messages[1].clone(), b"AD")
-            .unwrap();
+        let decrypted2 = bob_ratchet.decrypt(&encrypted_messages[1].clone()).unwrap();
         assert_eq!(String::from_utf8(decrypted2).unwrap(), messages[1]);
 
-        let decrypted4 = bob_ratchet
-            .decrypt(&encrypted_messages[3].clone(), b"AD")
-            .unwrap();
+        let decrypted4 = bob_ratchet.decrypt(&encrypted_messages[3].clone()).unwrap();
         assert_eq!(String::from_utf8(decrypted4).unwrap(), messages[3]);
     }
 
@@ -659,10 +645,8 @@ mod tests {
 
         // Initial message exchange to establish the ratchet
         let alice_message = "Hello, Bob!";
-        let encrypted_message = alice_ratchet
-            .encrypt(alice_message.as_bytes(), b"AD")
-            .unwrap();
-        let decrypted = bob_ratchet.decrypt(&encrypted_message, b"AD").unwrap();
+        let encrypted_message = alice_ratchet.encrypt(alice_message.as_bytes()).unwrap();
+        let decrypted = bob_ratchet.decrypt(&encrypted_message).unwrap();
         assert_eq!(String::from_utf8(decrypted).unwrap(), alice_message);
 
         // Save current ratchet state for later comparison
@@ -672,14 +656,14 @@ mod tests {
         for i in 0..5 {
             // Bob to Alice
             let bob_msg = format!("Message from Bob {}", i);
-            let encrypted = bob_ratchet.encrypt(bob_msg.as_bytes(), b"AD").unwrap();
-            let decrypted = alice_ratchet.decrypt(&encrypted, b"AD").unwrap();
+            let encrypted = bob_ratchet.encrypt(bob_msg.as_bytes()).unwrap();
+            let decrypted = alice_ratchet.decrypt(&encrypted).unwrap();
             assert_eq!(String::from_utf8(decrypted).unwrap(), bob_msg);
 
             // Alice to Bob
             let alice_msg = format!("Message from Alice {}", i);
-            let encrypted = alice_ratchet.encrypt(alice_msg.as_bytes(), b"AD").unwrap();
-            let decrypted = bob_ratchet.decrypt(&encrypted, b"AD").unwrap();
+            let encrypted = alice_ratchet.encrypt(alice_msg.as_bytes()).unwrap();
+            let decrypted = bob_ratchet.decrypt(&encrypted).unwrap();
             assert_eq!(String::from_utf8(decrypted).unwrap(), alice_msg);
         }
 
@@ -700,8 +684,8 @@ mod tests {
         let large_message = vec![b'A'; 100 * 1024];
 
         // Encrypt and decrypt
-        let encrypted = alice_ratchet.encrypt(&large_message, b"AD").unwrap();
-        let decrypted = bob_ratchet.decrypt(&encrypted, b"AD").unwrap();
+        let encrypted = alice_ratchet.encrypt(&large_message).unwrap();
+        let decrypted = bob_ratchet.decrypt(&encrypted).unwrap();
 
         assert_eq!(decrypted, large_message);
     }
@@ -711,9 +695,9 @@ mod tests {
         let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
 
         let empty_message = b"";
-        let encrypted = alice_ratchet.encrypt(empty_message, b"AD").unwrap();
+        let encrypted = alice_ratchet.encrypt(empty_message).unwrap();
         let decrypted = bob_ratchet
-            .decrypt(&encrypted, b"AD")
+            .decrypt(&encrypted)
             .map_err(|err| {
                 println!("{}", err.to_string());
                 err
@@ -734,20 +718,18 @@ mod tests {
         let mut encrypted_messages = Vec::new();
         for i in 0..5 {
             let msg = format!("Message {}", i);
-            encrypted_messages.push(alice_ratchet.encrypt(msg.as_bytes(), b"AD").unwrap());
+            encrypted_messages.push(alice_ratchet.encrypt(msg.as_bytes()).unwrap());
         }
 
         // Bob receives first message
-        let _ = bob_ratchet
-            .decrypt(&encrypted_messages[0].clone(), b"AD")
-            .unwrap();
+        let _ = bob_ratchet.decrypt(&encrypted_messages[0].clone()).unwrap();
 
         // Bob tries to decrypt message 4 (skipping 3 messages, which exceeds max_skip=2)
-        let result = bob_ratchet.decrypt(&encrypted_messages[4].clone(), b"AD");
+        let result = bob_ratchet.decrypt(&encrypted_messages[4].clone());
         assert!(result.is_err());
 
         // But message 3 should work (skipping 2 messages)
-        let result = bob_ratchet.decrypt(&encrypted_messages[3].clone(), b"AD");
+        let result = bob_ratchet.decrypt(&encrypted_messages[3].clone());
         assert!(result.is_ok());
     }
 }

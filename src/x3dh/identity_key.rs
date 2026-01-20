@@ -24,7 +24,6 @@ pub struct IdentityKey {
     signing_key: Box<SigningKey>,
     dh_key: X25519Secret,
 }
-
 impl IdentityKey {
     /// Creates a new identity key with randomly generated components.
     pub fn new() -> Self {
@@ -82,6 +81,12 @@ impl IdentityKey {
         bytes[32..64].copy_from_slice(self.dh_key.as_bytes());
 
         bytes
+    }
+}
+
+impl Default for IdentityKey {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -253,6 +253,7 @@ fn serialize_ratchet(ratchet: &DoubleRatchet) -> RatchetProto {
             Some(key) => key.to_vec(),
             None => Vec::new(),
         },
+        ad: ratchet.state.ad.to_vec(),
     };
 
     let mut skipped_keys = Vec::new();
@@ -301,6 +302,12 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
     }
     let mut root_key = Box::new([0u8; 32]);
     root_key.copy_from_slice(&state_proto.root_key);
+
+    if state_proto.ad.len() != 64 {
+        return Err(Error::Serde("Invalid associated data length".to_string()));
+    }
+    let mut ad = Box::new([0u8; 64]);
+    ad.copy_from_slice(&state_proto.ad);
 
     let sending_chain_proto = state_proto
         .sending_chain
@@ -371,6 +378,7 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
     };
 
     let state = RatchetState {
+        ad,
         dh_pair,
         remote_dh_key_public,
         root_key,
@@ -441,8 +449,8 @@ mod tests {
 
         // Exchange messages before serialization
         let message1 = "Hello before serialization";
-        let encrypted1 = alice_session.encrypt(message1.as_bytes(), b"test").unwrap();
-        let decrypted1 = bob_session.decrypt(&encrypted1, b"test").unwrap();
+        let encrypted1 = alice_session.encrypt(message1.as_bytes()).unwrap();
+        let decrypted1 = bob_session.decrypt(&encrypted1).unwrap();
         assert_eq!(String::from_utf8(decrypted1).unwrap(), message1);
 
         // Serialize both sessions
@@ -454,10 +462,8 @@ mod tests {
 
         // Verify sessions work after restoration
         let message2 = "Hello after serialization";
-        let encrypted2 = alice_restored
-            .encrypt(message2.as_bytes(), b"test")
-            .unwrap();
-        let decrypted2 = bob_restored.decrypt(&encrypted2, b"test").unwrap();
+        let encrypted2 = alice_restored.encrypt(message2.as_bytes()).unwrap();
+        let decrypted2 = bob_restored.decrypt(&encrypted2).unwrap();
         assert_eq!(String::from_utf8(decrypted2).unwrap(), message2);
     }
 
@@ -469,27 +475,21 @@ mod tests {
         let messages = ["Message 1", "Message 2", "Message 3"];
         let encrypted_messages: Vec<_> = messages
             .iter()
-            .map(|msg| alice_session.encrypt(msg.as_bytes(), b"test").unwrap())
+            .map(|msg| alice_session.encrypt(msg.as_bytes()).unwrap())
             .collect();
 
         // Bob receives first message
-        let _ = bob_session
-            .decrypt(&encrypted_messages[0], b"test")
-            .unwrap();
+        let _ = bob_session.decrypt(&encrypted_messages[0]).unwrap();
 
         // Serialize Bob's session with pending messages
         let bob_serialized = bob_session.serialize().unwrap();
         let mut bob_restored = Session::deserialize(&bob_serialized).unwrap();
 
         // Receive messages out of order in restored session
-        let decrypted3 = bob_restored
-            .decrypt(&encrypted_messages[2], b"test")
-            .unwrap();
+        let decrypted3 = bob_restored.decrypt(&encrypted_messages[2]).unwrap();
         assert_eq!(String::from_utf8(decrypted3).unwrap(), messages[2]);
 
-        let decrypted2 = bob_restored
-            .decrypt(&encrypted_messages[1], b"test")
-            .unwrap();
+        let decrypted2 = bob_restored.decrypt(&encrypted_messages[1]).unwrap();
         assert_eq!(String::from_utf8(decrypted2).unwrap(), messages[1]);
     }
 

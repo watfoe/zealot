@@ -3,3 +3,4 @@
 /fuzz/target
 /fuzz/out
 Cargo.lock
+*.DS_store

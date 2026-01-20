@@ -18,11 +18,9 @@ fn get_session() -> Session {
 
 fn main() {
     let mut session = get_session();
-    let associated_data = b"fuzz-context";
-
     fuzz!(|data: &[u8]| {
         if let Ok(msg) = RatchetMessage::from_bytes(data) {
-            let _ = session.decrypt(&msg, associated_data);
+            let _ = session.decrypt(&msg);
         }
     });
 }

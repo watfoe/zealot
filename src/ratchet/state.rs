@@ -4,6 +4,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 #[derive(Clone)]
 pub(crate) struct RatchetState {
+    /// Associated Data that contains identity information for both parties
+    pub(crate) ad: Box<[u8; 64]>,
     /// Current DH key pair for this participant
     pub(crate) dh_pair: X25519Secret,
     /// Remote participant's current DH public key
@@ -30,16 +32,21 @@ pub(crate) struct RatchetState {
 impl Zeroize for RatchetState {
     fn zeroize(&mut self) {
         self.dh_pair.zeroize();
-
+        self.ad.zeroize();
         self.root_key.zeroize();
         self.sending_chain.zeroize();
         self.receiving_chain.zeroize();
+        self.next_sending_header_key.zeroize();
 
-        self.sending_header_key.as_mut().map(|key| key.zeroize());
-        self.receiving_header_key.as_mut().map(|key| key.zeroize());
-        self.next_receiving_header_key
-            .as_mut()
-            .map(|key| key.zeroize());
+        if let Some(key) = self.sending_header_key.as_mut() {
+            key.zeroize()
+        }
+        if let Some(key) = self.receiving_header_key.as_mut() {
+            key.zeroize()
+        }
+        if let Some(key) = self.next_receiving_header_key.as_mut() {
+            key.zeroize()
+        }
     }
 }
 
