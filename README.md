@@ -93,6 +93,14 @@ This library implements all the cryptographic components needed for a secure mes
 4. **User Authentication**: Verifying user identities
 5. **Key Storage**: Securely storing private keys and session state
 
+## Why this library exists
+
+Zealot is not an attempt to replace established Signal Protocol implementations such as [libsignal](https://github.com/signalapp/libsignal) or [vodozemac](https://github.com/matrix-org/vodozemac), nor is it a claim that writing one’s own crypto is generally advisable. In fact, experience with this project has reinforced how easy it is to make subtle, security-relevant mistakes.
+
+The primary motivation behind Zealot was deep, end-to-end understanding of the protocol that sits at the absolute core of a secure messaging system. Because encryption is tightly coupled to session state, durability, failure handling, and client behavior in real applications, treating it purely as a black-box dependency was not sufficient for the goals of our project.
+
+Zealot follows the official Signal specifications and pseudocode, relies on standard cryptographic primitives (rather than inventing new ones), and is best understood as an engineering implementation of a well-documented protocol rather than a novel cryptosystem.
+
 ## ⚠️ Security Notice
 
 **THIS LIBRARY HAS NOT UNDERGONE A SECURITY AUDIT. USE AT YOUR OWN RISK!**

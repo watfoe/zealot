@@ -17,10 +17,9 @@ use rand::TryRngCore;
 use sha2::Sha256;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use rand::rngs::OsRng;
 use x25519_dalek::SharedSecret;
 use zeroize::{Zeroize, ZeroizeOnDrop};
-
-const NONCE_SIZE: usize = 12; // AES-GCM uses 12-byte (96-bit) nonces
 
 thread_local! {
     static AD_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(256));
@@ -240,7 +239,7 @@ impl DoubleRatchet {
             let header_bytes = header.to_bytes();
 
             let mut nonce_slice = Box::new([0u8; 12]);
-            rand::rng()
+            OsRng
                 .try_fill_bytes(nonce_slice.as_mut_slice())
                 .map_err(|_| Error::Random)?;
 
@@ -271,18 +270,15 @@ impl DoubleRatchet {
         // Derive encryption key and IV from the message key
         let hkdf = Hkdf::<Sha256>::new(None, key);
 
-        let mut derived_material = [0u8; 44];
-        hkdf.expand(b"Zealot-E2E-Keys", &mut derived_material)
+        let mut derived_material = Box::new([0u8; 44]);
+        hkdf.expand(b"Zealot-E2E-Keys", derived_material.as_mut_slice())
             .expect("HKDF expansion failed");
 
         let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(&derived_material[0..32]);
         let cipher = Aes256GcmSiv::new(key);
+        let nonce = Nonce::from_slice(&derived_material[32..44]);
 
-        let mut nonce_bytes = [0u8; NONCE_SIZE];
-        nonce_bytes.copy_from_slice(&derived_material[32..44]);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        cipher
+        let ciphertext = cipher
             .encrypt(
                 nonce,
                 aes_gcm_siv::aead::Payload {
@@ -290,7 +286,11 @@ impl DoubleRatchet {
                     aad: ad,
                 },
             )
-            .map_err(|_| Error::Protocol("Message encryption failed".to_string()))
+            .map_err(|_| Error::Protocol("Message encryption failed".to_string()));
+
+        derived_material.zeroize();
+
+        ciphertext
     }
 
     /// Decrypts a message using the Double Ratchet algorithm.
@@ -498,18 +498,15 @@ impl DoubleRatchet {
     fn decrypt_message(key: &[u8; 32], ciphertext: &[u8], ad: &[u8]) -> Result<Vec<u8>, Error> {
         let hkdf = Hkdf::<Sha256>::new(None, key.as_slice());
 
-        let mut derived_material = [0u8; 44];
-        hkdf.expand(b"Zealot-E2E-Keys", &mut derived_material)
+        let mut derived_material = Box::new([0u8; 44]);
+        hkdf.expand(b"Zealot-E2E-Keys", derived_material.as_mut_slice())
             .expect("HKDF expansion failed");
 
         let aes_key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(&derived_material[0..32]);
         let cipher = Aes256GcmSiv::new(aes_key);
+        let nonce = Nonce::from_slice(&derived_material[32..44]);
 
-        let mut nonce_bytes = [0u8; NONCE_SIZE];
-        nonce_bytes.copy_from_slice(&derived_material[32..44]);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        cipher
+        let plaintext = cipher
             .decrypt(
                 nonce,
                 aes_gcm_siv::aead::Payload {
@@ -517,7 +514,11 @@ impl DoubleRatchet {
                     aad: ad,
                 },
             )
-            .map_err(|_| Error::Protocol("Message decryption failed".to_string()))
+            .map_err(|_| Error::Protocol("Message decryption failed".to_string()));
+
+        derived_material.zeroize();
+
+        plaintext
     }
 }
 
