@@ -17,6 +17,7 @@ use rand::TryRngCore;
 use sha2::Sha256;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use rand::rngs::OsRng;
 use x25519_dalek::SharedSecret;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -238,7 +239,7 @@ impl DoubleRatchet {
             let header_bytes = header.to_bytes();
 
             let mut nonce_slice = Box::new([0u8; 12]);
-            rand::rng()
+            OsRng
                 .try_fill_bytes(nonce_slice.as_mut_slice())
                 .map_err(|_| Error::Random)?;
 
