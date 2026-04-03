@@ -33,6 +33,8 @@ pub struct OutboundSessionX3DHKeys {
 pub struct Session {
     /// A probabilistically globally unique identifier for this session.
     pub(crate) session_id: String,
+    /// Peer's public IdentityKey used to establish this session
+    pub(crate) peer_ik_public: X25519PublicKey,
     pub(crate) ratchet: DoubleRatchet,
     /// X3DH Key materials that were used to establish this outbound session by `Alice`.
     pub(crate) x3dh_keys: Option<OutboundSessionX3DHKeys>,
@@ -42,11 +44,13 @@ impl Session {
     /// Creates a new session with the given parameters.
     pub(crate) fn new(
         session_id: String,
+        peer_ik_public: X25519PublicKey,
         ratchet: DoubleRatchet,
         x3dh_keys: Option<OutboundSessionX3DHKeys>,
     ) -> Self {
         Self {
             session_id,
+            peer_ik_public,
             ratchet,
             x3dh_keys,
         }

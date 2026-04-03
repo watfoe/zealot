@@ -157,6 +157,7 @@ impl Session {
     pub fn serialize(&self) -> Result<Vec<u8>, Error> {
         let session_proto = SessionProto {
             session_id: self.session_id.clone(),
+            peer_ik_public: self.peer_ik_public.to_bytes().to_vec(),
             ratchet: Some(serialize_ratchet(&self.ratchet)),
             x3dh_keys: self.x3dh_keys.as_ref().map(|keys| keys.serialize()),
         };
@@ -173,6 +174,13 @@ impl Session {
         let session_proto = SessionProto::decode(bytes)
             .map_err(|err| Error::Serde(format!("Failed to decode session: {err:?}")))?;
 
+        if session_proto.peer_ik_public.len() != 32 {
+            return Err(Error::Serde("Invalid public peer identity key length".to_string()));
+        }
+        let mut ik_public_bytes = [0u8; 32];
+        ik_public_bytes.copy_from_slice(&session_proto.peer_ik_public);
+        let peer_ik_public = X25519PublicKey::from(ik_public_bytes);
+
         let ratchet = if let Some(ratchet_proto) = session_proto.ratchet {
             deserialize_ratchet(ratchet_proto)?
         } else {
@@ -187,6 +195,7 @@ impl Session {
 
         Ok(Session {
             session_id: session_proto.session_id,
+            peer_ik_public,
             ratchet,
             x3dh_keys,
         })
@@ -528,7 +537,7 @@ mod tests {
         let outbound_x3dh_keys = alice_session.x3dh_keys.as_ref().unwrap();
 
         let bob_session = bob_account
-            .create_inbound_session(&alice_account.ik_public(), &outbound_x3dh_keys)
+            .create_inbound_session(alice_account.ik_public(), &outbound_x3dh_keys)
             .unwrap();
 
         (alice_session, bob_session)

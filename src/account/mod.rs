@@ -124,6 +124,7 @@ impl Account {
 
         let session = Session::new(
             session_id,
+            bob_x3dh_public_keys.ik_public,
             ratchet,
             Some(OutboundSessionX3DHKeys {
                 spk_id: bob_x3dh_public_keys.spk_public().0,
@@ -141,7 +142,7 @@ impl Account {
     /// the initiator's identity and ephemeral keys.
     pub fn create_inbound_session(
         &mut self,
-        alice_ik_public: &X25519PublicKey,
+        alice_ik_public: X25519PublicKey,
         outbound_session_x3dhkeys: &OutboundSessionX3DHKeys,
     ) -> Result<Session, Error> {
         let spk = if let Some(spk) = self.spk_store.get(outbound_session_x3dhkeys.spk_id) {
@@ -160,13 +161,13 @@ impl Account {
             None
         };
 
-        let ad = Self::derive_session_ad(alice_ik_public, &self.ik_public());
+        let ad = Self::derive_session_ad(&alice_ik_public, &self.ik_public());
 
         let shared_secret = X3DH::new(&self.config.protocol_info).initiate_for_bob(
             &self.ik,
             spk,
             otpk,
-            alice_ik_public,
+            &alice_ik_public,
             &outbound_session_x3dhkeys.ephemeral_key_public,
         )?;
 
@@ -177,11 +178,11 @@ impl Account {
             ad,
         );
         let session_id = Self::derive_session_id(
-            alice_ik_public,
+            &alice_ik_public,
             &self.ik_public(),
             &outbound_session_x3dhkeys.ephemeral_key_public,
         );
-        let session = Session::new(session_id, ratchet, None);
+        let session = Session::new(session_id, alice_ik_public, ratchet, None);
 
         Ok(session)
     }
@@ -327,7 +328,7 @@ mod tests {
             .x3dh_keys()
             .expect("Alice should have X3DH keys");
 
-        let bob_session = bob.create_inbound_session(&alice_ik, &x3dh_msg).unwrap();
+        let bob_session = bob.create_inbound_session(alice_ik, &x3dh_msg).unwrap();
 
         assert_eq!(
             alice_session.session_id(),

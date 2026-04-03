@@ -54,7 +54,6 @@ pub struct DoubleRatchet {
     pub(crate) skipped_message_keys: HashMap<(Box<[u8; 32]>, u32), Box<[u8; 32]>>,
     pub(crate) max_skip: u32,
 }
-
 impl Zeroize for DoubleRatchet {
     fn zeroize(&mut self) {
         self.state.zeroize();
@@ -64,7 +63,6 @@ impl Zeroize for DoubleRatchet {
         }
     }
 }
-
 impl ZeroizeOnDrop for DoubleRatchet {}
 
 impl DoubleRatchet {

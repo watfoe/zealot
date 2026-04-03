@@ -24,7 +24,7 @@ mod integration_tests {
         println!("Step 5: Bob creates inbound session from Alice...");
         let outbound_x3dh_keys = alice_session.x3dh_keys().unwrap();
         let mut bob_session = bob_account
-            .create_inbound_session(&alice_account.ik_public(), &outbound_x3dh_keys)
+            .create_inbound_session(alice_account.ik_public(), &outbound_x3dh_keys)
             .unwrap();
 
         println!("Step 6: Alice sends first message...");
@@ -134,12 +134,12 @@ mod integration_tests {
         println!("Bob and Charlie create inbound sessions...");
         let alice_bob_x3dh_keys = alice_bob_session.x3dh_keys().unwrap();
         let mut bob_session = bob_account
-            .create_inbound_session(&alice_account.ik_public(), &alice_bob_x3dh_keys)
+            .create_inbound_session(alice_account.ik_public(), &alice_bob_x3dh_keys)
             .unwrap();
 
         let alice_charlie_x3dh_keys = alice_charlie_session.x3dh_keys().unwrap();
         let mut charlie_session = charlie_account
-            .create_inbound_session(&alice_account.ik_public(), &alice_charlie_x3dh_keys)
+            .create_inbound_session(alice_account.ik_public(), &alice_charlie_x3dh_keys)
             .unwrap();
 
         println!("Alice sends messages to Bob and Charlie...");
@@ -228,7 +228,7 @@ mod integration_tests {
             .unwrap();
         let outbound_x3dh_keys = alice_session.x3dh_keys().unwrap();
         let mut bob_session = bob_account
-            .create_inbound_session(&alice_account.ik_public(), &outbound_x3dh_keys)
+            .create_inbound_session(alice_account.ik_public(), &outbound_x3dh_keys)
             .unwrap();
 
         println!("Exchange a few messages to advance the ratchet...");
@@ -261,7 +261,7 @@ mod integration_tests {
 
         let new_outbound_x3dh_keys = alice_new_session.x3dh_keys().unwrap();
         let mut bob_new_session = bob_new_account
-            .create_inbound_session(&alice_account.ik_public(), &new_outbound_x3dh_keys)
+            .create_inbound_session(alice_account.ik_public(), &new_outbound_x3dh_keys)
             .unwrap();
 
         println!("Testing resumed communication...");
@@ -325,7 +325,7 @@ mod integration_tests {
 
         let outbound_x3dh_keys = alice_session.x3dh_keys().unwrap();
         let bob_session = bob_account
-            .create_inbound_session(&alice_account.ik_public(), &outbound_x3dh_keys)
+            .create_inbound_session(alice_account.ik_public(), &outbound_x3dh_keys)
             .unwrap();
 
         // Simulate mobile app pattern: serialize after every operation

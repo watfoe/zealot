@@ -49,8 +49,9 @@ message OutboundSessionX3dhKeysProto {
 
 message SessionProto {
     string session_id = 1;
-    RatchetProto ratchet = 2;
-    optional OutboundSessionX3dhKeysProto x3dh_keys = 3;
+    bytes peer_ik_public = 2;
+    RatchetProto ratchet = 3;
+    optional OutboundSessionX3dhKeysProto x3dh_keys = 4;
 }
 
 message RatchetProto {

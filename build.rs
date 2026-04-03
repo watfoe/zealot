@@ -1,4 +1,4 @@
-//! # A Signal Protocol Implementation
+//! # Zealot; Signal's X3DH and Double Ratchet Protocol Implementation
 
 fn main() -> std::io::Result<()> {
     let protos = ["src/proto/zealot.proto"];
