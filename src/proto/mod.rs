@@ -175,7 +175,9 @@ impl Session {
             .map_err(|err| Error::Serde(format!("Failed to decode session: {err:?}")))?;
 
         if session_proto.peer_ik_public.len() != 32 {
-            return Err(Error::Serde("Invalid public peer identity key length".to_string()));
+            return Err(Error::Serde(
+                "Invalid public peer identity key length".to_string(),
+            ));
         }
         let mut ik_public_bytes = [0u8; 32];
         ik_public_bytes.copy_from_slice(&session_proto.peer_ik_public);

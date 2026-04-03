@@ -14,10 +14,10 @@ use aes_gcm_siv::aead::Aead;
 use aes_gcm_siv::{Aes256GcmSiv, KeyInit, Nonce};
 use hkdf::Hkdf;
 use rand::TryRngCore;
+use rand::rngs::OsRng;
 use sha2::Sha256;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use rand::rngs::OsRng;
 use x25519_dalek::SharedSecret;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
