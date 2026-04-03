@@ -14,10 +14,10 @@ use aes_gcm_siv::aead::Aead;
 use aes_gcm_siv::{Aes256GcmSiv, KeyInit, Nonce};
 use hkdf::Hkdf;
 use rand::TryRngCore;
+use rand::rngs::OsRng;
 use sha2::Sha256;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use rand::rngs::OsRng;
 use x25519_dalek::SharedSecret;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -54,7 +54,6 @@ pub struct DoubleRatchet {
     pub(crate) skipped_message_keys: HashMap<(Box<[u8; 32]>, u32), Box<[u8; 32]>>,
     pub(crate) max_skip: u32,
 }
-
 impl Zeroize for DoubleRatchet {
     fn zeroize(&mut self) {
         self.state.zeroize();
@@ -64,7 +63,6 @@ impl Zeroize for DoubleRatchet {
         }
     }
 }
-
 impl ZeroizeOnDrop for DoubleRatchet {}
 
 impl DoubleRatchet {
