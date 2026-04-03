@@ -76,6 +76,11 @@ impl Session {
         self.session_id.clone()
     }
 
+    /// Returns the peer's public identity key used to establish this session.
+    pub fn peer_ik_public(&self) -> X25519PublicKey {
+        self.peer_ik_public
+    }
+
     /// Returns X3DH Key materials that were used to establish this outbound session by `Alice`.
     pub fn x3dh_keys(&self) -> Option<OutboundSessionX3DHKeys> {
         self.x3dh_keys
