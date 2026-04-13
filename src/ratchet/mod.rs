@@ -324,6 +324,12 @@ impl DoubleRatchet {
             self.dh_ratchet(&header);
         }
 
+        if header.message_number < self.state.receiving_message_number {
+            return Err(Error::Protocol(
+                "Duplicate or delayed message already processed".to_string(),
+            ));
+        }
+
         if header.message_number > self.state.receiving_message_number {
             if let Err(err) = self.skip_message_keys(header.message_number) {
                 self.state = old_state;
