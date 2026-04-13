@@ -474,7 +474,7 @@ impl DoubleRatchet {
     /// this method generates all the intermediate message keys to maintain
     /// security and allow for later decryption of out-of-order messages.
     fn skip_message_keys(&mut self, until: u32) -> Result<(), Error> {
-        if self.state.receiving_message_number + self.max_skip < until {
+        if until.saturating_sub(self.state.receiving_message_number) > self.max_skip {
             return Err(Error::Protocol("Too many skipped messages".to_string()));
         }
 
