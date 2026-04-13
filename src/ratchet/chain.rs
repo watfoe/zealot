@@ -21,15 +21,15 @@ impl Chain {
     pub(crate) fn next(&mut self) -> Box<[u8; 32]> {
         type HmacSha256 = Hmac<Sha256>;
 
-        let mut chain_mac = HmacSha256::new_from_slice(self.chain_key.as_slice())
-            .expect("HMAC initialization failed");
-        chain_mac.update(&[0x01]);
-        let chain_result = chain_mac.finalize().into_bytes();
-
         let mut message_mac = HmacSha256::new_from_slice(self.chain_key.as_slice())
             .expect("HMAC initialization failed");
-        message_mac.update(&[0x02]);
+        message_mac.update(&[0x01]);
         let message_result = message_mac.finalize().into_bytes();
+
+        let mut chain_mac = HmacSha256::new_from_slice(self.chain_key.as_slice())
+            .expect("HMAC initialization failed");
+        chain_mac.update(&[0x02]);
+        let chain_result = chain_mac.finalize().into_bytes();
 
         self.chain_key.copy_from_slice(&chain_result);
         self.index = self.index.wrapping_add(1);

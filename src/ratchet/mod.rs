@@ -340,10 +340,10 @@ impl DoubleRatchet {
             buffer.extend_from_slice(&message.header);
             Self::decrypt_message(&message_key, &message.ciphertext, buffer)
         })
-            .inspect_err(|_| {
-                self.state = old_state;
-                self.skipped_message_keys = old_skipped_keys;
-            })?;
+        .inspect_err(|_| {
+            self.state = old_state;
+            self.skipped_message_keys = old_skipped_keys;
+        })?;
 
         Ok(plaintext)
     }
@@ -378,7 +378,8 @@ impl DoubleRatchet {
                 Self::decrypt_message(&message_key, &message.ciphertext, buffer)
             })?;
 
-            self.skipped_message_keys.remove(&(header_key.clone(), message_no));
+            self.skipped_message_keys
+                .remove(&(header_key.clone(), message_no));
 
             return Ok(Some(plaintext));
         }
