@@ -251,20 +251,24 @@ fn serialize_ratchet(ratchet: &DoubleRatchet) -> RatchetProto {
         previous_sending_chain_length: ratchet.state.previous_sending_chain_length,
         sending_message_number: ratchet.state.sending_message_number,
         receiving_message_number: ratchet.state.receiving_message_number,
-        sending_header_key: match &ratchet.state.sending_header_key {
-            Some(key) => key.to_vec(),
-            None => Vec::new(),
-        },
-        receiving_header_key: match &ratchet.state.receiving_header_key {
-            Some(key) => key.to_vec(),
-            None => Vec::new(),
-        },
+        sending_header_key: ratchet
+            .state
+            .sending_header_key
+            .as_ref()
+            .map(|k| k.to_vec()),
+        receiving_header_key: ratchet
+            .state
+            .receiving_header_key
+            .as_ref()
+            .map(|k| k.to_vec()),
         next_sending_header_key: ratchet.state.next_sending_header_key.to_vec(),
-        next_receiving_header_key: match &ratchet.state.next_receiving_header_key {
-            Some(key) => key.to_vec(),
-            None => Vec::new(),
-        },
+        next_receiving_header_key: ratchet
+            .state
+            .next_receiving_header_key
+            .as_ref()
+            .map(|k| k.to_vec()),
         ad: ratchet.state.ad.to_vec(),
+        dh_pair: dh_pair_bytes,
     };
 
     let mut skipped_keys = Vec::new();
@@ -277,7 +281,6 @@ fn serialize_ratchet(ratchet: &DoubleRatchet) -> RatchetProto {
     }
 
     RatchetProto {
-        dh_pair: dh_pair_bytes,
         state: Some(state_proto),
         skipped_message_keys: skipped_keys,
         max_skip: ratchet.max_skip,
@@ -285,17 +288,17 @@ fn serialize_ratchet(ratchet: &DoubleRatchet) -> RatchetProto {
 }
 
 fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
-    if proto.dh_pair.len() != 32 {
+    let state_proto = proto
+        .state
+        .ok_or_else(|| Error::Serde("Missing ratchet state".to_string()))?;
+
+    if state_proto.dh_pair.len() != 32 {
         return Err(Error::Serde("Invalid DH key pair length".to_string()));
     }
 
     let mut dh_pair_bytes = [0u8; 32];
-    dh_pair_bytes.copy_from_slice(&proto.dh_pair);
+    dh_pair_bytes.copy_from_slice(&state_proto.dh_pair);
     let dh_pair = X25519Secret::from(dh_pair_bytes);
-
-    let state_proto = proto
-        .state
-        .ok_or_else(|| Error::Serde("Missing ratchet state".to_string()))?;
 
     let remote_dh_key_public = if !state_proto.remote_dh_key_public.is_empty() {
         if state_proto.remote_dh_key_public.len() != 32 {
@@ -341,31 +344,35 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
     let mut receiving_chain = Chain::new(receiving_chain_key);
     receiving_chain.set_index(receiving_chain_proto.index);
 
-    let sending_header_key = if !state_proto.sending_header_key.is_empty() {
-        if state_proto.sending_header_key.len() != 32 {
-            return Err(Error::Serde(
-                "Invalid sending header key length".to_string(),
-            ));
-        }
-        let mut key = Box::new([0u8; 32]);
-        key.copy_from_slice(&state_proto.sending_header_key);
-        Some(key)
-    } else {
-        None
-    };
+    let sending_header_key = state_proto
+        .sending_header_key
+        .map(|proto_key| {
+            if proto_key.len() != 32 {
+                return Err(Error::Serde(
+                    "Invalid sending header key length".to_string(),
+                ));
+            }
+            let mut key = Box::new([0u8; 32]);
+            key.copy_from_slice(&proto_key);
 
-    let receiving_header_key = if !state_proto.receiving_header_key.is_empty() {
-        if state_proto.receiving_header_key.len() != 32 {
-            return Err(Error::Serde(
-                "Invalid receiving header key length".to_string(),
-            ));
-        }
-        let mut key = Box::new([0u8; 32]);
-        key.copy_from_slice(&state_proto.receiving_header_key);
-        Some(key)
-    } else {
-        None
-    };
+            Ok(key)
+        })
+        .transpose()?;
+
+    let receiving_header_key = state_proto
+        .receiving_header_key
+        .map(|proto_key| {
+            if proto_key.len() != 32 {
+                return Err(Error::Serde(
+                    "Invalid receiving header key length".to_string(),
+                ));
+            }
+            let mut key = Box::new([0u8; 32]);
+            key.copy_from_slice(&proto_key);
+
+            Ok(key)
+        })
+        .transpose()?;
 
     if state_proto.next_sending_header_key.len() != 32 {
         return Err(Error::Serde(
@@ -375,18 +382,20 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
     let mut next_sending_header_key = Box::new([0u8; 32]);
     next_sending_header_key.copy_from_slice(&state_proto.next_sending_header_key);
 
-    let next_receiving_header_key = if !state_proto.next_receiving_header_key.is_empty() {
-        if state_proto.next_receiving_header_key.len() != 32 {
-            return Err(Error::Serde(
-                "Invalid next receiving header key length".to_string(),
-            ));
-        }
-        let mut key = Box::new([0u8; 32]);
-        key.copy_from_slice(&state_proto.next_receiving_header_key);
-        Some(key)
-    } else {
-        None
-    };
+    let next_receiving_header_key = state_proto
+        .next_receiving_header_key
+        .map(|proto_key| {
+            if proto_key.len() != 32 {
+                return Err(Error::Serde(
+                    "Invalid next receiving header key length".to_string(),
+                ));
+            }
+            let mut key = Box::new([0u8; 32]);
+            key.copy_from_slice(&proto_key);
+
+            Ok(key)
+        })
+        .transpose()?;
 
     let state = RatchetState {
         ad,
