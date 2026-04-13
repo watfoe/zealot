@@ -39,6 +39,7 @@ impl Chain {
         message_key
     }
 
+    /// Only used during hydration stage from a serialized copy
     pub(crate) fn set_index(&mut self, index: u32) {
         self.index = index;
     }

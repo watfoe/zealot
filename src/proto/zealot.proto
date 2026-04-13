@@ -55,10 +55,9 @@ message SessionProto {
 }
 
 message RatchetProto {
-    bytes dh_pair = 1;
-    RatchetStateProto state = 2;
-    repeated SkippedMessageKeyProto skipped_message_keys = 3;
-    uint32 max_skip = 4;
+    RatchetStateProto state = 1;
+    repeated SkippedMessageKeyProto skipped_message_keys = 2;
+    uint32 max_skip = 3;
 }
 
 message SkippedMessageKeyProto {
@@ -75,11 +74,12 @@ message RatchetStateProto {
     uint32 previous_sending_chain_length = 5;
     uint32 sending_message_number = 6;
     uint32 receiving_message_number = 7;
-    bytes sending_header_key = 8;
-    bytes receiving_header_key = 9;
+    optional bytes sending_header_key = 8;
+    optional bytes receiving_header_key = 9;
     bytes next_sending_header_key = 10;
-    bytes next_receiving_header_key = 11;
+    optional bytes next_receiving_header_key = 11;
     bytes ad = 12;
+    bytes dh_pair = 13;
 }
 
 message ChainProto {
