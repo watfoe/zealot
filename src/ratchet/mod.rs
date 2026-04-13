@@ -300,38 +300,38 @@ impl DoubleRatchet {
     /// 4. Generates any skipped message keys
     /// 5. Derives the message key and decrypts the message
     pub fn decrypt(&mut self, message: &RatchetMessage) -> Result<Vec<u8>, Error> {
-        // Clone the state so that if the decryption fails, we revert back to the old state
         let old_state = self.state.clone();
+        let old_skipped_keys = self.skipped_message_keys.clone();
 
         match self.try_skipped_message_keys(message) {
-            Ok(plaintext) => {
-                if let Some(plaintext) = plaintext {
-                    return Ok(plaintext);
-                }
-            }
-            Err(err) => {
-                self.state = old_state;
-                return Err(err);
-            }
+            Ok(Some(plaintext)) => return Ok(plaintext),
+            Err(err) => return Err(err),
+            Ok(None) => {}
         }
 
         let (header, should_ratchet) = self.try_decrypt_header(&message.header)?;
 
         if should_ratchet {
-            self.skip_message_keys(header.previous_chain_length)?;
-            // Ratchet step - Rotate the keys
+            if header.previous_chain_length < self.state.receiving_message_number {
+                return Err(Error::Protocol("Invalid previous chain length".to_string()));
+            }
+
+            if let Err(err) = self.skip_message_keys(header.previous_chain_length) {
+                self.state = old_state;
+                self.skipped_message_keys = old_skipped_keys;
+                return Err(err);
+            }
             self.dh_ratchet(&header);
         }
 
-        // Skip ahead if needed
         if header.message_number > self.state.receiving_message_number {
             if let Err(err) = self.skip_message_keys(header.message_number) {
                 self.state = old_state;
+                self.skipped_message_keys = old_skipped_keys;
                 return Err(err);
             }
         }
 
-        // Current message key
         let message_key = self.state.receiving_chain.next();
         self.state.receiving_message_number = self.state.receiving_message_number.wrapping_add(1);
 
@@ -340,9 +340,10 @@ impl DoubleRatchet {
             buffer.extend_from_slice(&message.header);
             Self::decrypt_message(&message_key, &message.ciphertext, buffer)
         })
-        .inspect_err(|_| {
-            self.state = old_state;
-        })?;
+            .inspect_err(|_| {
+                self.state = old_state;
+                self.skipped_message_keys = old_skipped_keys;
+            })?;
 
         Ok(plaintext)
     }
@@ -368,7 +369,7 @@ impl DoubleRatchet {
         if let Some((header_key, message_no)) = key {
             let message_key = self
                 .skipped_message_keys
-                .remove(&(header_key.clone(), message_no))
+                .get(&(header_key.clone(), message_no))
                 .expect("Key must exist");
 
             let plaintext = with_ad_buffer(|buffer| {
@@ -376,6 +377,8 @@ impl DoubleRatchet {
                 buffer.extend_from_slice(&message.header);
                 Self::decrypt_message(&message_key, &message.ciphertext, buffer)
             })?;
+
+            self.skipped_message_keys.remove(&(header_key.clone(), message_no));
 
             return Ok(Some(plaintext));
         }
