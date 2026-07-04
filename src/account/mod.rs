@@ -211,9 +211,8 @@ impl Account {
 
     /// Derives a unique session ID from identity and ephemeral keys.
     ///
-    /// Uses SHA256 hash of the identity keys, ephemeral key, and additional
-    /// randomness to prevent collisions.
-    fn derive_session_id(
+    /// Uses SHA256 hash of the identity keys, ephemeral key.
+    pub fn derive_session_id(
         initiator_ik: &X25519PublicKey,
         responder_ik: &X25519PublicKey,
         ephemeral_key_public: &X25519PublicKey,

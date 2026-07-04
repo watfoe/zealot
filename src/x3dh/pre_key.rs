@@ -7,9 +7,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// A medium-term signed pre-key as defined in Signal's X3DH protocol.
 ///
-/// Signed pre-keys are medium-term keys that are signed with the user's
-/// identity key to provide authentication. They are typically rotated
-/// periodically (e.g., weekly or monthly).
+/// Signed pre-keys are signed with the user's identity key to provide authentication.
+/// They are typically rotated periodically (e.g., weekly or monthly).
 pub struct SignedPreKey {
     pre_key: X25519Secret,
     id: u32,
