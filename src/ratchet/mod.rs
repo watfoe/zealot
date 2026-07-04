@@ -342,9 +342,7 @@ impl DoubleRatchet {
         }
 
         if header.message_number < self.state.receiving_message_number {
-            return Err(Error::Protocol(
-                "Duplicate or delayed message already processed".to_string(),
-            ));
+            return Err(Error::DuplicateMessage);
         }
 
         if header.message_number > self.state.receiving_message_number {
@@ -428,7 +426,7 @@ impl DoubleRatchet {
             }
         }
 
-        Err(Error::Protocol("Failed to decrypt header".to_string()))
+        Err(Error::HeaderKeyMismatch)
     }
 
     /// Decrypts a message header using a specific header key.
@@ -501,7 +499,7 @@ impl DoubleRatchet {
     /// security and allow for later decryption of out-of-order messages.
     fn skip_message_keys(&mut self, until: u32) -> Result<(), Error> {
         if until.saturating_sub(self.state.receiving_message_number) > self.max_skip {
-            return Err(Error::Protocol("Too many skipped messages".to_string()));
+            return Err(Error::TooManySkipped);
         }
 
         if self.state.receiving_chain.chain_key.as_ref() != &[0u8; 32] {
@@ -590,7 +588,7 @@ impl DoubleRatchet {
                     aad: ad,
                 },
             )
-            .map_err(|_| Error::Protocol("Message decryption failed".to_string()));
+            .map_err(|_| Error::MessageDecryptionFailed);
 
         derived_material.zeroize();
 
@@ -803,11 +801,53 @@ mod tests {
 
         // Bob tries to decrypt message 4 (skipping 3 messages, which exceeds max_skip=2)
         let result = bob_ratchet.decrypt(&encrypted_messages[4].clone());
-        assert!(result.is_err());
+        assert_eq!(result, Err(Error::TooManySkipped));
 
         // But message 3 should work (skipping 2 messages)
         let result = bob_ratchet.decrypt(&encrypted_messages[3].clone());
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_header_key_mismatch_error() {
+        let (_, mut bob_ratchet) = create_ratchets();
+        // A second, unrelated pair has different header keys.
+        let (mut other_alice, _) = create_ratchets();
+
+        let foreign = other_alice.encrypt(b"not for bob").unwrap();
+
+        // Bob can decrypt neither with his current nor next receiving header key.
+        assert_eq!(bob_ratchet.decrypt(&foreign), Err(Error::HeaderKeyMismatch));
+    }
+
+    #[test]
+    fn test_duplicate_message_error() {
+        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+
+        let message = alice_ratchet.encrypt(b"hello").unwrap();
+
+        // First delivery succeeds.
+        assert!(bob_ratchet.decrypt(&message).is_ok());
+
+        // Re-delivering the same (already processed) message is reported distinctly.
+        assert_eq!(
+            bob_ratchet.decrypt(&message),
+            Err(Error::DuplicateMessage)
+        );
+    }
+
+    #[test]
+    fn test_tampered_ciphertext_error() {
+        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+
+        let mut message = alice_ratchet.encrypt(b"hello").unwrap();
+        // The header still authenticates, but the body no longer does.
+        message.ciphertext[0] ^= 0xFF;
+
+        assert_eq!(
+            bob_ratchet.decrypt(&message),
+            Err(Error::MessageDecryptionFailed)
+        );
     }
 
     #[test]
