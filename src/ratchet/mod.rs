@@ -544,7 +544,10 @@ impl DoubleRatchet {
         }
 
         let map_key = (header_key, message_number);
-        match self.skipped_message_keys.insert(map_key.clone(), message_key) {
+        match self
+            .skipped_message_keys
+            .insert(map_key.clone(), message_key)
+        {
             // A key for this (header_key, message_number) already existed: it was
             // overwritten in place, so the ordering is unchanged.
             Some(mut previous) => previous.zeroize(),
@@ -558,7 +561,11 @@ impl DoubleRatchet {
         if let Some(mut message_key) = self.skipped_message_keys.remove(map_key) {
             message_key.zeroize();
         }
-        if let Some(pos) = self.skipped_message_keys_order.iter().position(|k| k == map_key) {
+        if let Some(pos) = self
+            .skipped_message_keys_order
+            .iter()
+            .position(|k| k == map_key)
+        {
             self.skipped_message_keys_order.remove(pos);
         }
     }

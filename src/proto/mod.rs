@@ -421,9 +421,19 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
     let mut skipped_message_keys = HashMap::new();
     let mut skipped_key_order = VecDeque::new();
     for key in proto.skipped_message_keys {
+        if key.header_key.len() != 32 {
+            return Err(Error::Serde(
+                "Invalid skipped message header key length".to_string(),
+            ));
+        }
         let mut header_key = Box::new([0u8; 32]);
         header_key.copy_from_slice(&key.header_key);
 
+        if key.message_key.len() != 32 {
+            return Err(Error::Serde(
+                "Invalid skipped message key length".to_string(),
+            ));
+        }
         let mut message_key = Box::new([0u8; 32]);
         message_key.copy_from_slice(&key.message_key);
 
@@ -546,6 +556,71 @@ mod tests {
         // Mark as established and verify keys are cleared
         restored_session.mark_as_established();
         assert!(restored_session.x3dh_keys.is_none());
+    }
+
+    #[test]
+    fn test_deserialize_ratchet_rejects_bad_skipped_key_lengths() {
+        use super::{ChainProto, RatchetProto, RatchetStateProto, SkippedMessageKeyProto};
+
+        let valid_state = || RatchetStateProto {
+            remote_dh_key_public: Vec::new(),
+            root_key: vec![0u8; 32],
+            sending_chain: Some(ChainProto {
+                chain_key: vec![0u8; 32],
+                index: 0,
+            }),
+            receiving_chain: Some(ChainProto {
+                chain_key: vec![0u8; 32],
+                index: 0,
+            }),
+            previous_sending_chain_length: 0,
+            sending_message_number: 0,
+            receiving_message_number: 0,
+            sending_header_key: None,
+            receiving_header_key: None,
+            next_sending_header_key: vec![0u8; 32],
+            next_receiving_header_key: None,
+            ad: vec![0u8; 64],
+            dh_pair: vec![0u8; 32],
+        };
+
+        // A state with no skipped keys deserializes cleanly.
+        assert!(
+            super::deserialize_ratchet(RatchetProto {
+                state: Some(valid_state()),
+                skipped_message_keys: Vec::new(),
+                max_skip: 0,
+            })
+            .is_ok()
+        );
+
+        // A truncated header key must return an error.
+        assert!(
+            super::deserialize_ratchet(RatchetProto {
+                state: Some(valid_state()),
+                skipped_message_keys: vec![SkippedMessageKeyProto {
+                    header_key: vec![0u8; 16],
+                    message_number: 0,
+                    message_key: vec![0u8; 32],
+                }],
+                max_skip: 0,
+            })
+            .is_err()
+        );
+
+        // A truncated message key must be rejected.
+        assert!(
+            super::deserialize_ratchet(RatchetProto {
+                state: Some(valid_state()),
+                skipped_message_keys: vec![SkippedMessageKeyProto {
+                    header_key: vec![0u8; 32],
+                    message_number: 0,
+                    message_key: vec![0u8; 10],
+                }],
+                max_skip: 0,
+            })
+            .is_err()
+        );
     }
 
     fn create_test_session_pair() -> (Session, Session) {
