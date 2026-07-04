@@ -830,10 +830,7 @@ mod tests {
         assert!(bob_ratchet.decrypt(&message).is_ok());
 
         // Re-delivering the same (already processed) message is reported distinctly.
-        assert_eq!(
-            bob_ratchet.decrypt(&message),
-            Err(Error::DuplicateMessage)
-        );
+        assert_eq!(bob_ratchet.decrypt(&message), Err(Error::DuplicateMessage));
     }
 
     #[test]

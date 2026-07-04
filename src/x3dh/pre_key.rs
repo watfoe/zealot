@@ -118,7 +118,30 @@ impl SignedPreKeyStore {
         self.next_id = self.next_id.wrapping_add(1);
         self.keys.insert(id, SignedPreKey::new(id));
 
+        self.evict_stale_keys();
+
         (id, self.get_current())
+    }
+
+    /// Evicts the oldest signed pre-keys until at most `max_keys` remain.
+    ///
+    /// Old signed pre-keys are deliberately retained for a while so a delayed
+    /// inbound X3DH message that referenced a recently-rotated key can still be
+    /// processed. Because rotation is gated by `spk_rotation_interval`, keeping
+    /// the most recent `max_keys` keys bounds retention to roughly
+    /// `max_keys * spk_rotation_interval` of history instead of growing without
+    /// bound. At least the current key is always kept.
+    fn evict_stale_keys(&mut self) {
+        let retain = self.max_keys.max(1);
+        while self.keys.len() > retain {
+            // Ids increase monotonically with each rotation, so the smallest id
+            // is the oldest key.
+            let oldest_id = match self.keys.keys().min() {
+                Some(id) => *id,
+                None => break,
+            };
+            self.keys.remove(&oldest_id);
+        }
     }
 
     pub(crate) fn get(&self, id: u32) -> Option<&SignedPreKey> {
@@ -177,6 +200,36 @@ mod tests {
             deserialized_key.public_key().as_bytes(),
             original_key.public_key().as_bytes()
         );
+    }
+
+    #[test]
+    fn test_signed_pre_key_store_evicts_beyond_max_keys() {
+        let max_keys = 3;
+        let mut store = SignedPreKeyStore::new(max_keys);
+
+        // `new` seeds one key (id 1); rotate several more times past the cap.
+        let mut ids = vec![1];
+        for _ in 0..5 {
+            let (id, _) = store.renew_key();
+            ids.push(id);
+        }
+
+        // The store never grows beyond `max_keys`.
+        assert_eq!(store.keys.len(), max_keys);
+
+        // The most recent `max_keys` keys are retained; older ones are evicted.
+        let newest = *ids.last().unwrap();
+        for &id in &ids {
+            let should_be_retained = id > newest - max_keys as u32;
+            assert_eq!(
+                store.get(id).is_some(),
+                should_be_retained,
+                "unexpected retention for id {id}"
+            );
+        }
+
+        // The current key is always present and is the newest.
+        assert_eq!(store.get_current().id(), newest);
     }
 
     #[test]
