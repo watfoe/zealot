@@ -140,6 +140,41 @@ impl Account {
     ///
     /// Implements the responder's (Bob's) side of the X3DH protocol using
     /// the initiator's identity and ephemeral keys.
+    ///
+    /// # Account mutation
+    ///
+    /// This takes `&mut self` because it **irreversibly consumes account
+    /// state**: if the initiator's keys reference a one-time pre-key
+    /// ([`OutboundSessionX3DHKeys::otpk_id`] is `Some`), that key is removed
+    /// from this account and can never be used again. This one-shot consumption
+    /// is what gives the initial message its forward secrecy. (If `otpk_id` is
+    /// `None`, no one-time pre-key is consumed.)
+    ///
+    /// # Persistence contract
+    ///
+    /// The returned [`Session`] and this now-mutated [`Account`] **must be
+    /// persisted together atomically** — in a single transaction. They are two
+    /// halves of one state transition; committing one without the other leaves
+    /// the two stores diverged, and both outcomes are unrecoverable:
+    ///
+    /// - **Account committed, session lost:** the one-time pre-key is durably
+    ///   gone but no session exists. The initiator's retries re-send the same
+    ///   `otpk_id`, so every retry fails here with
+    ///   [`Error::PreKey`]`("One-time pre-key not found")` — permanently. The
+    ///   sender is stranded, and the session cannot be re-derived because the
+    ///   consumed key material no longer exists.
+    /// - **Session committed, account lost:** the one-time pre-key survives in
+    ///   the durable account and can be consumed a second time, enabling
+    ///   one-time-pre-key reuse and weakening forward secrecy.
+    ///
+    /// Persisting both in one atomic transaction is the only way to avoid both; the
+    /// library cannot enforce it because the storage boundary lives in the
+    /// caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::PreKey`] if the referenced signed pre-key id or
+    /// one-time pre-key id is not present in this account.
     pub fn create_inbound_session(
         &mut self,
         alice_ik_public: X25519PublicKey,
@@ -211,9 +246,8 @@ impl Account {
 
     /// Derives a unique session ID from identity and ephemeral keys.
     ///
-    /// Uses SHA256 hash of the identity keys, ephemeral key, and additional
-    /// randomness to prevent collisions.
-    fn derive_session_id(
+    /// Uses SHA256 hash of the identity keys, ephemeral key.
+    pub fn derive_session_id(
         initiator_ik: &X25519PublicKey,
         responder_ik: &X25519PublicKey,
         ephemeral_key_public: &X25519PublicKey,

@@ -13,17 +13,24 @@ use crate::{X25519PublicKey, X25519Secret};
 use aes_gcm_siv::aead::Aead;
 use aes_gcm_siv::{Aes256GcmSiv, KeyInit, Nonce};
 use hkdf::Hkdf;
-use rand::TryRngCore;
-use rand::rngs::OsRng;
+use rand::TryRng;
+use rand::rngs::SysRng;
 use sha2::Sha256;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use x25519_dalek::SharedSecret;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 thread_local! {
     static AD_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(256));
 }
+
+/// Maximum number of skipped message keys retained across all chains.
+///
+/// `max_skip` only bounds how many keys a single out-of-order jump may
+/// generate; keys for messages that never arrive would otherwise accumulate
+/// across chains without bound (and get re-serialized into every session blob).
+const MAX_SKIPPED_MESSAGE_KEYS: usize = 2000;
 
 fn with_ad_buffer<F, R>(f: F) -> R
 where
@@ -52,6 +59,9 @@ pub struct DoubleRatchet {
     pub(crate) state: RatchetState,
     // Map<(header_key, message_no): message_key>
     pub(crate) skipped_message_keys: HashMap<(Box<[u8; 32]>, u32), Box<[u8; 32]>>,
+    // Insertion order of `skipped_message_keys`, kept in sync so the oldest
+    // entry can be evicted once the store reaches `MAX_SKIPPED_MESSAGE_KEYS`.
+    pub(crate) skipped_message_keys_order: VecDeque<(Box<[u8; 32]>, u32)>,
     pub(crate) max_skip: u32,
 }
 impl Zeroize for DoubleRatchet {
@@ -60,6 +70,9 @@ impl Zeroize for DoubleRatchet {
         for ((mut hk, _), mut key) in self.skipped_message_keys.drain() {
             hk.zeroize();
             key.zeroize();
+        }
+        for (mut hk, _) in self.skipped_message_keys_order.drain(..) {
+            hk.zeroize();
         }
     }
 }
@@ -114,6 +127,7 @@ impl DoubleRatchet {
                 receiving_message_number: 0,
             },
             skipped_message_keys: HashMap::new(),
+            skipped_message_keys_order: VecDeque::new(),
             max_skip: max_skipped_messages,
         }
     }
@@ -148,6 +162,7 @@ impl DoubleRatchet {
                 receiving_message_number: 0,
             },
             skipped_message_keys: HashMap::new(),
+            skipped_message_keys_order: VecDeque::new(),
             max_skip: max_skipped_messages,
         }
     }
@@ -237,7 +252,7 @@ impl DoubleRatchet {
             let header_bytes = header.to_bytes();
 
             let mut nonce_slice = Box::new([0u8; 12]);
-            OsRng
+            SysRng
                 .try_fill_bytes(nonce_slice.as_mut_slice())
                 .map_err(|_| Error::Random)?;
 
@@ -302,6 +317,7 @@ impl DoubleRatchet {
     pub fn decrypt(&mut self, message: &RatchetMessage) -> Result<Vec<u8>, Error> {
         let old_state = self.state.clone();
         let old_skipped_keys = self.skipped_message_keys.clone();
+        let old_skipped_order = self.skipped_message_keys_order.clone();
 
         match self.try_skipped_message_keys(message) {
             Ok(Some(plaintext)) => return Ok(plaintext),
@@ -319,21 +335,21 @@ impl DoubleRatchet {
             if let Err(err) = self.skip_message_keys(header.previous_chain_length) {
                 self.state = old_state;
                 self.skipped_message_keys = old_skipped_keys;
+                self.skipped_message_keys_order = old_skipped_order;
                 return Err(err);
             }
             self.dh_ratchet(&header);
         }
 
         if header.message_number < self.state.receiving_message_number {
-            return Err(Error::Protocol(
-                "Duplicate or delayed message already processed".to_string(),
-            ));
+            return Err(Error::DuplicateMessage);
         }
 
         if header.message_number > self.state.receiving_message_number {
             if let Err(err) = self.skip_message_keys(header.message_number) {
                 self.state = old_state;
                 self.skipped_message_keys = old_skipped_keys;
+                self.skipped_message_keys_order = old_skipped_order;
                 return Err(err);
             }
         }
@@ -349,6 +365,7 @@ impl DoubleRatchet {
         .inspect_err(|_| {
             self.state = old_state;
             self.skipped_message_keys = old_skipped_keys;
+            self.skipped_message_keys_order = old_skipped_order;
         })?;
 
         Ok(plaintext)
@@ -361,36 +378,36 @@ impl DoubleRatchet {
         &mut self,
         message: &RatchetMessage,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let mut key = None;
-
+        // Find the stored entry, if any, whose header key decrypts this
+        // message's header to the message number it was stored under.
+        let mut matched = None;
         for (header_key, message_no) in self.skipped_message_keys.keys() {
             if let Some(header) = self.decrypt_header(&message.header, header_key) {
                 if header.message_number == *message_no {
-                    key = Some((header_key, *message_no));
+                    matched = Some((header_key.clone(), *message_no));
                     break;
                 }
             }
         }
 
-        if let Some((header_key, message_no)) = key {
-            let message_key = self
-                .skipped_message_keys
-                .get(&(header_key.clone(), message_no))
-                .expect("Key must exist");
+        let Some(map_key) = matched else {
+            return Ok(None);
+        };
 
-            let plaintext = with_ad_buffer(|buffer| {
-                buffer.extend_from_slice(self.state.ad.as_slice());
-                buffer.extend_from_slice(&message.header);
-                Self::decrypt_message(&message_key, &message.ciphertext, buffer)
-            })?;
+        let message_key = self
+            .skipped_message_keys
+            .get(&map_key)
+            .expect("Key must exist");
 
-            self.skipped_message_keys
-                .remove(&(header_key.clone(), message_no));
+        let plaintext = with_ad_buffer(|buffer| {
+            buffer.extend_from_slice(self.state.ad.as_slice());
+            buffer.extend_from_slice(&message.header);
+            Self::decrypt_message(message_key, &message.ciphertext, buffer)
+        })?;
 
-            return Ok(Some(plaintext));
-        }
+        self.remove_skipped_message_key(&map_key);
 
-        Ok(None)
+        Ok(Some(plaintext))
     }
 
     /// Tries to decrypt a header with both current and next header keys.
@@ -409,7 +426,7 @@ impl DoubleRatchet {
             }
         }
 
-        Err(Error::Protocol("Failed to decrypt header".to_string()))
+        Err(Error::HeaderKeyMismatch)
     }
 
     /// Decrypts a message header using a specific header key.
@@ -482,7 +499,7 @@ impl DoubleRatchet {
     /// security and allow for later decryption of out-of-order messages.
     fn skip_message_keys(&mut self, until: u32) -> Result<(), Error> {
         if until.saturating_sub(self.state.receiving_message_number) > self.max_skip {
-            return Err(Error::Protocol("Too many skipped messages".to_string()));
+            return Err(Error::TooManySkipped);
         }
 
         if self.state.receiving_chain.chain_key.as_ref() != &[0u8; 32] {
@@ -490,8 +507,11 @@ impl DoubleRatchet {
                 let message_key = self.state.receiving_chain.next();
 
                 if let Some(rhk) = self.state.receiving_header_key.clone() {
-                    self.skipped_message_keys
-                        .insert((rhk, self.state.receiving_message_number), message_key);
+                    self.insert_skipped_message_key(
+                        rhk,
+                        self.state.receiving_message_number,
+                        message_key,
+                    );
                 }
 
                 self.state.receiving_message_number =
@@ -500,6 +520,52 @@ impl DoubleRatchet {
         }
 
         Ok(())
+    }
+
+    /// Stores a skipped message key, evicting the oldest entries once the store
+    /// reaches [`MAX_SKIPPED_MESSAGE_KEYS`].
+    fn insert_skipped_message_key(
+        &mut self,
+        header_key: Box<[u8; 32]>,
+        message_number: u32,
+        message_key: Box<[u8; 32]>,
+    ) {
+        while self.skipped_message_keys.len() >= MAX_SKIPPED_MESSAGE_KEYS {
+            match self.skipped_message_keys_order.pop_front() {
+                Some(oldest) => {
+                    if let Some(mut evicted) = self.skipped_message_keys.remove(&oldest) {
+                        evicted.zeroize();
+                    }
+                }
+                None => break,
+            }
+        }
+
+        let map_key = (header_key, message_number);
+        match self
+            .skipped_message_keys
+            .insert(map_key.clone(), message_key)
+        {
+            // A key for this (header_key, message_number) already existed: it was
+            // overwritten in place, so the ordering is unchanged.
+            Some(mut previous) => previous.zeroize(),
+            None => self.skipped_message_keys_order.push_back(map_key),
+        }
+    }
+
+    /// Removes a skipped message key from both the store and the order tracker,
+    /// zeroizing the key material.
+    fn remove_skipped_message_key(&mut self, map_key: &(Box<[u8; 32]>, u32)) {
+        if let Some(mut message_key) = self.skipped_message_keys.remove(map_key) {
+            message_key.zeroize();
+        }
+        if let Some(pos) = self
+            .skipped_message_keys_order
+            .iter()
+            .position(|k| k == map_key)
+        {
+            self.skipped_message_keys_order.remove(pos);
+        }
     }
 
     /// Decrypt a message
@@ -522,7 +588,7 @@ impl DoubleRatchet {
                     aad: ad,
                 },
             )
-            .map_err(|_| Error::Protocol("Message decryption failed".to_string()));
+            .map_err(|_| Error::MessageDecryptionFailed);
 
         derived_material.zeroize();
 
@@ -534,7 +600,6 @@ impl DoubleRatchet {
 mod tests {
     use super::*;
     use crate::SignedPreKey;
-    use rand::rand_core::OsRng;
 
     fn create_ratchets() -> (DoubleRatchet, DoubleRatchet) {
         let bob_spk = SignedPreKey::new(1);
@@ -543,7 +608,7 @@ mod tests {
         let shared_secret = generate_random_seed();
 
         let mut ad = Box::new([0u8; 64]);
-        OsRng.try_fill_bytes(ad.as_mut_slice()).unwrap();
+        SysRng.try_fill_bytes(ad.as_mut_slice()).unwrap();
 
         // Initialize ratchets
         let alice_ratchet = DoubleRatchet::initialize_for_alice(
@@ -735,10 +800,93 @@ mod tests {
 
         // Bob tries to decrypt message 4 (skipping 3 messages, which exceeds max_skip=2)
         let result = bob_ratchet.decrypt(&encrypted_messages[4].clone());
-        assert!(result.is_err());
+        assert_eq!(result, Err(Error::TooManySkipped));
 
         // But message 3 should work (skipping 2 messages)
         let result = bob_ratchet.decrypt(&encrypted_messages[3].clone());
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_header_key_mismatch_error() {
+        let (_, mut bob_ratchet) = create_ratchets();
+        // A second, unrelated pair has different header keys.
+        let (mut other_alice, _) = create_ratchets();
+
+        let foreign = other_alice.encrypt(b"not for bob").unwrap();
+
+        // Bob can decrypt neither with his current nor next receiving header key.
+        assert_eq!(bob_ratchet.decrypt(&foreign), Err(Error::HeaderKeyMismatch));
+    }
+
+    #[test]
+    fn test_duplicate_message_error() {
+        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+
+        let message = alice_ratchet.encrypt(b"hello").unwrap();
+
+        // First delivery succeeds.
+        assert!(bob_ratchet.decrypt(&message).is_ok());
+
+        // Re-delivering the same (already processed) message is reported distinctly.
+        assert_eq!(bob_ratchet.decrypt(&message), Err(Error::DuplicateMessage));
+    }
+
+    #[test]
+    fn test_tampered_ciphertext_error() {
+        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+
+        let mut message = alice_ratchet.encrypt(b"hello").unwrap();
+        // The header still authenticates, but the body no longer does.
+        message.ciphertext[0] ^= 0xFF;
+
+        assert_eq!(
+            bob_ratchet.decrypt(&message),
+            Err(Error::MessageDecryptionFailed)
+        );
+    }
+
+    #[test]
+    fn test_skipped_message_keys_are_bounded() {
+        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+
+        // Allow a single jump to skip more messages than the store can hold, so
+        // the per-jump `max_skip` cap can't hide the total-store bound.
+        let total = MAX_SKIPPED_MESSAGE_KEYS + 100;
+        bob_ratchet.max_skip = total as u32;
+
+        // Alice sends messages numbered 0..=total, all on the same chain.
+        let mut encrypted = Vec::with_capacity(total + 1);
+        for i in 0..=total {
+            let msg = format!("Message {i}");
+            encrypted.push(alice_ratchet.encrypt(msg.as_bytes()).unwrap());
+        }
+
+        // Bob jumps straight to the last message. Decrypting it generates skipped
+        // keys for messages 0..total (that's `total` keys), which must be capped.
+        let decrypted = bob_ratchet.decrypt(&encrypted[total].clone()).unwrap();
+        assert_eq!(
+            String::from_utf8(decrypted).unwrap(),
+            format!("Message {total}")
+        );
+
+        // The store never exceeds the cap, and the order tracker stays in sync.
+        assert_eq!(
+            bob_ratchet.skipped_message_keys.len(),
+            MAX_SKIPPED_MESSAGE_KEYS
+        );
+        assert_eq!(
+            bob_ratchet.skipped_message_keys_order.len(),
+            MAX_SKIPPED_MESSAGE_KEYS
+        );
+
+        // The oldest keys were evicted: message 0 can no longer be recovered,
+        // while the newest retained key (message `total - 1`) still can.
+        assert!(bob_ratchet.decrypt(&encrypted[0].clone()).is_err());
+        let recovered = bob_ratchet.decrypt(&encrypted[total - 1].clone()).unwrap();
+        assert_eq!(
+            String::from_utf8(recovered).unwrap(),
+            format!("Message {}", total - 1)
+        );
     }
 }

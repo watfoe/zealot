@@ -4,3 +4,5 @@
 /fuzz/out
 Cargo.lock
 *.DS_store
+FIXES.md
+.claude
