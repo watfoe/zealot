@@ -13,8 +13,8 @@ use crate::{X25519PublicKey, X25519Secret};
 use aes_gcm_siv::aead::Aead;
 use aes_gcm_siv::{Aes256GcmSiv, KeyInit, Nonce};
 use hkdf::Hkdf;
-use rand::TryRngCore;
-use rand::rngs::OsRng;
+use rand::TryRng;
+use rand::rngs::SysRng;
 use sha2::Sha256;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -252,7 +252,7 @@ impl DoubleRatchet {
             let header_bytes = header.to_bytes();
 
             let mut nonce_slice = Box::new([0u8; 12]);
-            OsRng
+            SysRng
                 .try_fill_bytes(nonce_slice.as_mut_slice())
                 .map_err(|_| Error::Random)?;
 
@@ -600,7 +600,6 @@ impl DoubleRatchet {
 mod tests {
     use super::*;
     use crate::SignedPreKey;
-    use rand::rand_core::OsRng;
 
     fn create_ratchets() -> (DoubleRatchet, DoubleRatchet) {
         let bob_spk = SignedPreKey::new(1);
@@ -609,7 +608,7 @@ mod tests {
         let shared_secret = generate_random_seed();
 
         let mut ad = Box::new([0u8; 64]);
-        OsRng.try_fill_bytes(ad.as_mut_slice()).unwrap();
+        SysRng.try_fill_bytes(ad.as_mut_slice()).unwrap();
 
         // Initialize ratchets
         let alice_ratchet = DoubleRatchet::initialize_for_alice(
