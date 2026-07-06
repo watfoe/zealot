@@ -150,6 +150,14 @@ impl OneTimePreKeyStore {
         self.keys.remove(&id)
     }
 
+    /// Re-inserts a previously taken one-time pre-key, keyed by its id.
+    ///
+    /// Used to undo a [`Self::take`] when the operation that reserved the key
+    /// (e.g. establishing an inbound session) ends up failing.
+    pub(crate) fn insert(&mut self, key: OneTimePreKey) {
+        self.keys.insert(key.id(), key);
+    }
+
     /// Returns the current number of pre-keys in the store.
     pub(crate) fn count(&self) -> usize {
         self.keys.len()

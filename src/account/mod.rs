@@ -150,6 +150,10 @@ impl Account {
     /// is what gives the initial message its forward secrecy. (If `otpk_id` is
     /// `None`, no one-time pre-key is consumed.)
     ///
+    /// The pre-key is consumed only when this call returns `Ok`. If it returns
+    /// `Err`, the account is left unchanged, so the same initiation message can
+    /// be retried against the same pre-key.
+    ///
     /// # Persistence contract
     ///
     /// The returned [`Session`] and this now-mutated [`Account`] **must be
@@ -198,13 +202,21 @@ impl Account {
 
         let ad = Self::derive_session_ad(&alice_ik_public, &self.ik_public());
 
-        let shared_secret = X3DH::new(&self.config.protocol_info).initiate_for_bob(
+        let shared_secret = match X3DH::new(&self.config.protocol_info).initiate_for_bob(
             &self.ik,
             spk,
-            otpk,
+            otpk.clone(),
             &alice_ik_public,
             &outbound_session_x3dhkeys.ephemeral_key_public,
-        )?;
+        ) {
+            Ok(shared_secret) => shared_secret,
+            Err(err) => {
+                if let Some(otpk) = otpk {
+                    self.otpk_store.insert(otpk);
+                }
+                return Err(err);
+            }
+        };
 
         let ratchet = DoubleRatchet::initialize_for_bob(
             shared_secret,
@@ -390,5 +402,69 @@ mod tests {
             &bob_bytes,
             "AD second half should be Responder (Bob)"
         );
+    }
+
+    /// Builds an X3DH bundle for `account` that advertises one of its one-time
+    /// pre-keys, returning the bundle and the chosen pre-key id.
+    fn bundle_with_otpk(account: &Account) -> (X3DHPublicKeys, u32) {
+        let bundle = account.prekey_bundle();
+        let (otpk_id, otpk_pub) = {
+            let (id, pk) = bundle.otpks_public.iter().next().unwrap();
+            (*id, *pk)
+        };
+        let public = X3DHPublicKeys::new(
+            bundle.ik_public,
+            bundle.signing_key_public,
+            bundle.signature,
+            bundle.spk_public,
+            Some((otpk_id, otpk_pub)),
+        );
+        (public, otpk_id)
+    }
+
+    #[test]
+    fn test_inbound_session_success_consumes_one_time_pre_key() {
+        let alice = Account::new(None);
+        let mut bob = Account::new(None);
+
+        let (bob_public, otpk_id) = bundle_with_otpk(&bob);
+        let alice_session = alice.create_outbound_session(&bob_public).unwrap();
+        let x3dh_keys = alice_session.x3dh_keys().unwrap();
+        assert_eq!(x3dh_keys.otpk_id, Some(otpk_id));
+
+        let count_before = bob.otpk_store.count();
+        bob.create_inbound_session(alice.ik_public(), &x3dh_keys)
+            .unwrap();
+
+        // A successful inbound session consumes the one-time pre-key.
+        assert_eq!(bob.otpk_store.count(), count_before - 1);
+        assert!(!bob.otpk_store.keys.contains_key(&otpk_id));
+    }
+
+    #[test]
+    fn test_inbound_session_failure_preserves_one_time_pre_key() {
+        let alice = Account::new(None);
+        let mut bob = Account::new(None);
+
+        let (bob_public, otpk_id) = bundle_with_otpk(&bob);
+        let alice_session = alice.create_outbound_session(&bob_public).unwrap();
+        let x3dh_keys = alice_session.x3dh_keys().unwrap();
+
+        // Force the key agreement to fail *after* the one-time pre-key is read,
+        // by marking the stored key as already used.
+        bob.otpk_store
+            .keys
+            .get_mut(&otpk_id)
+            .unwrap()
+            .mark_as_used();
+        let count_before = bob.otpk_store.count();
+
+        let result = bob.create_inbound_session(alice.ik_public(), &x3dh_keys);
+        assert!(result.is_err());
+
+        // The failed attempt must have put the one-time pre-key back, so a retry
+        // remains possible instead of the sender being stranded.
+        assert_eq!(bob.otpk_store.count(), count_before);
+        assert!(bob.otpk_store.keys.contains_key(&otpk_id));
     }
 }
