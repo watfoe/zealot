@@ -76,6 +76,12 @@ impl Zeroize for DoubleRatchet {
         }
     }
 }
+impl Drop for DoubleRatchet {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 impl ZeroizeOnDrop for DoubleRatchet {}
 
 impl DoubleRatchet {

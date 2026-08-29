@@ -91,6 +91,12 @@ impl Zeroize for SignedPreKey {
     }
 }
 
+impl Drop for SignedPreKey {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 impl ZeroizeOnDrop for SignedPreKey {}
 
 /// Storage for signed pre-keys with automatic rotation and ID management.
@@ -163,6 +169,12 @@ impl Zeroize for SignedPreKeyStore {
         self.keys.clear();
         self.next_id = 0;
         self.max_keys = 0;
+    }
+}
+
+impl Drop for SignedPreKeyStore {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 

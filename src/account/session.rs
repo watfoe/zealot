@@ -95,4 +95,10 @@ impl Zeroize for Session {
     }
 }
 
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 impl ZeroizeOnDrop for Session {}

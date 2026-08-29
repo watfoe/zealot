@@ -311,6 +311,12 @@ impl Zeroize for Account {
     }
 }
 
+impl Drop for Account {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 impl ZeroizeOnDrop for Account {}
 
 #[cfg(test)]
@@ -391,7 +397,7 @@ mod tests {
         let alice_bytes = alice.ik_public().to_bytes();
         let bob_bytes = bob.ik_public().to_bytes();
 
-        let ad = alice_session.ratchet.state.ad;
+        let ad = &alice_session.ratchet.state.ad;
         assert_eq!(
             &ad[0..32],
             &alice_bytes,

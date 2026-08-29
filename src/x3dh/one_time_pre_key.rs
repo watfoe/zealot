@@ -101,6 +101,12 @@ impl Zeroize for OneTimePreKey {
     }
 }
 
+impl Drop for OneTimePreKey {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 impl ZeroizeOnDrop for OneTimePreKey {}
 
 /// Storage for one-time pre-keys with automatic ID management.
@@ -178,6 +184,12 @@ impl Zeroize for OneTimePreKeyStore {
         self.keys.clear();
         self.next_id = 0;
         self.max_keys = 0;
+    }
+}
+
+impl Drop for OneTimePreKeyStore {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 
