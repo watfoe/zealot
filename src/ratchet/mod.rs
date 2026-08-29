@@ -194,7 +194,7 @@ impl DoubleRatchet {
     /// 3. The next header encryption key
     fn kdf_rk_he(
         root_key: &[u8; 32],
-        mut dh_output: SharedSecret,
+        dh_output: SharedSecret,
     ) -> (Box<[u8; 32]>, Box<[u8; 32]>, Box<[u8; 32]>) {
         let hkdf = Hkdf::<Sha256>::new(Some(root_key), &dh_output.to_bytes());
 
@@ -210,8 +210,8 @@ impl DoubleRatchet {
 
         hkdf.expand(b"Zealot-E2E-Next-Header", next_header_key.as_mut_slice())
             .expect("HKDF expansion failed for next header key");
-
-        dh_output.zeroize();
+        
+        drop(dh_output);
 
         (new_root_key, chain_key, next_header_key)
     }
@@ -256,9 +256,9 @@ impl DoubleRatchet {
                 .try_fill_bytes(nonce_slice.as_mut_slice())
                 .map_err(|_| Error::Random)?;
 
-            let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(hk.as_slice());
+            let key = <&aes_gcm_siv::Key<Aes256GcmSiv>>::from(hk.as_ref());
             let cipher = Aes256GcmSiv::new(key);
-            let nonce = Nonce::from_slice(nonce_slice.as_slice());
+            let nonce = <&Nonce>::from(nonce_slice.as_ref());
 
             let mut ciphertext = cipher
                 .encrypt(nonce, header_bytes.as_ref())
@@ -287,9 +287,11 @@ impl DoubleRatchet {
         hkdf.expand(b"Zealot-E2E-Keys", derived_material.as_mut_slice())
             .expect("HKDF expansion failed");
 
-        let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(&derived_material[0..32]);
+        let key = <&aes_gcm_siv::Key<Aes256GcmSiv>>::try_from(&derived_material[0..32])
+            .map_err(|_| Error::Crypto("Invalid derived key length".to_string()))?;
         let cipher = Aes256GcmSiv::new(key);
-        let nonce = Nonce::from_slice(&derived_material[32..44]);
+        let nonce = <&Nonce>::try_from(&derived_material[32..44])
+            .map_err(|_| Error::Crypto("Invalid derived nonce length".to_string()))?;
 
         let ciphertext = cipher
             .encrypt(
@@ -438,9 +440,9 @@ impl DoubleRatchet {
         let nonce = &encrypted_header[0..12];
         let ciphertext = &encrypted_header[12..];
 
-        let key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(hk.as_slice());
+        let key = <&aes_gcm_siv::Key<Aes256GcmSiv>>::from(hk);
         let cipher = Aes256GcmSiv::new(key);
-        let nonce = Nonce::from_slice(nonce);
+        let nonce = <&Nonce>::try_from(nonce).ok()?;
 
         match cipher.decrypt(nonce, ciphertext) {
             Ok(plaintext) => {
@@ -576,9 +578,11 @@ impl DoubleRatchet {
         hkdf.expand(b"Zealot-E2E-Keys", derived_material.as_mut_slice())
             .expect("HKDF expansion failed");
 
-        let aes_key = aes_gcm_siv::Key::<Aes256GcmSiv>::from_slice(&derived_material[0..32]);
+        let aes_key = <&aes_gcm_siv::Key<Aes256GcmSiv>>::try_from(&derived_material[0..32])
+            .map_err(|_| Error::Crypto("Invalid derived key length".to_string()))?;
         let cipher = Aes256GcmSiv::new(aes_key);
-        let nonce = Nonce::from_slice(&derived_material[32..44]);
+        let nonce = <&Nonce>::try_from(&derived_material[32..44])
+            .map_err(|_| Error::Crypto("Invalid derived nonce length".to_string()))?;
 
         let plaintext = cipher
             .decrypt(

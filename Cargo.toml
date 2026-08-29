@@ -26,17 +26,17 @@ unwrap_used = "deny"
 mem_forget = "deny"
 
 [dependencies]
-aes-gcm-siv = "0.11.1"
-base64 = { version = "0.22.1", features = ["std"] }
-ed25519-dalek = { version = "2.1.1", features = ["rand_core", "std", "zeroize"] }
+aes-gcm-siv = "0.12.1"
+base64 = { version = "0.23.1", features = ["std"] }
+ed25519-dalek = { version = "3.0.0", features = ["rand_core", "zeroize"] }
 hkdf = "0.13"
 hmac = "0.13"
 prost = "0.14.3"
-rand = { version = "0.10", default-features = false, features = ["sys_rng"] }
+rand = { version = "0.10.2", default-features = false, features = ["sys_rng"] }
 sha2 = "0.11"
-thiserror = "2.0.12"
-x25519-dalek = { version = "2.0.1", features = ["static_secrets", "zeroize"] }
-zeroize = "1.8.2"
+thiserror = "2.0.20"
+x25519-dalek = { version = "3.0.0", features = ["static_secrets", "zeroize"] }
+zeroize = { version = "1.9.0", features = ["derive"] }
 
 [build-dependencies]
-prost-build = "0.14.3"
+prost-build = "0.14.4"

@@ -37,8 +37,16 @@ impl AsRef<PublicKey> for X25519PublicKey {
     }
 }
 
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone)]
 pub struct X25519Secret(Box<StaticSecret>);
+
+impl Zeroize for X25519Secret {
+    fn zeroize(&mut self) {
+        *self.0 = StaticSecret::from([0u8; 32]);
+    }
+}
+
+impl ZeroizeOnDrop for X25519Secret {}
 
 impl X25519Secret {
     #[inline]
@@ -77,5 +85,24 @@ impl From<Box<[u8; 32]>> for X25519Secret {
 impl AsRef<StaticSecret> for X25519Secret {
     fn as_ref(&self) -> &StaticSecret {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_secret_zeroize_clears_key_material() {
+        let mut secret = X25519Secret::from([7u8; 32]);
+        assert_eq!(secret.as_bytes(), &[7u8; 32]);
+
+        secret.zeroize();
+
+        assert_eq!(
+            secret.as_bytes(),
+            &[0u8; 32],
+            "zeroize must clear the secret bytes"
+        );
     }
 }
