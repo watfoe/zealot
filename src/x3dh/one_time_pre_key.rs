@@ -171,7 +171,7 @@ impl OneTimePreKeyStore {
 
     /// Generates additional pre-keys to maintain the desired pool size.
     pub(crate) fn replenish(&mut self) -> HashMap<u32, X25519PublicKey> {
-        let needed = self.max_keys.saturating_sub(self.keys.len());
+        let needed = self.max_keys.saturating_sub(self.count());
         self.generate_keys(needed)
     }
 }

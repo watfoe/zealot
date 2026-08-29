@@ -216,7 +216,7 @@ impl DoubleRatchet {
 
         hkdf.expand(b"Zealot-E2E-Next-Header", next_header_key.as_mut_slice())
             .expect("HKDF expansion failed for next header key");
-        
+
         drop(dh_output);
 
         (new_root_key, chain_key, next_header_key)

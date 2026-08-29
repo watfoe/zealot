@@ -71,7 +71,7 @@ mod integration_tests {
         ];
         let mut encrypted_messages = Vec::new();
 
-        for (i, msg) in alice_messages.iter().enumerate() {
+        for msg in alice_messages.iter() {
             encrypted_messages.push(alice_restored.encrypt(msg.as_bytes()).unwrap());
         }
 

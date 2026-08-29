@@ -138,7 +138,7 @@ mod tests {
         let before = secret.public_key().to_bytes();
 
         secret.zeroize();
-        
+
         let after = secret.public_key().to_bytes();
         assert_ne!(before, after, "stale public key survived zeroize");
         assert_eq!(

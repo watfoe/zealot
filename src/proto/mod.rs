@@ -5,7 +5,7 @@ use crate::{
     OutboundSessionX3DHKeys, Session, SignedPreKey, X25519PublicKey,
 };
 use prost::Message;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::{Duration, UNIX_EPOCH};
 
 include!(concat!(env!("OUT_DIR"), "/zealot.rs"));
@@ -20,7 +20,7 @@ impl Account {
             .unwrap_or_default()
             .as_secs();
 
-        let mut spk_keys = HashMap::with_capacity(self.spk_store.keys.len());
+        let mut spk_keys = BTreeMap::new();
         for (id, key) in self.spk_store.keys.iter() {
             spk_keys.insert(*id, key.to_bytes().to_vec());
         }
@@ -31,7 +31,7 @@ impl Account {
             keys: spk_keys,
         };
 
-        let mut otpk_keys = HashMap::with_capacity(self.otpk_store.count());
+        let mut otpk_keys = BTreeMap::new();
         for (id, key) in self.otpk_store.keys.iter() {
             otpk_keys.insert(*id, key.to_bytes().to_vec());
         }
@@ -640,5 +640,33 @@ mod tests {
             .unwrap();
 
         (alice_session, bob_session)
+    }
+
+    #[test]
+    fn test_account_serialization_is_deterministic() {
+        let account = Account::new(None);
+
+        let first = account.serialize().unwrap();
+        let second = account.serialize().unwrap();
+        let third = account.serialize().unwrap();
+
+        assert_eq!(first, second, "account serialization is not reproducible");
+        assert_eq!(first, third, "account serialization is not reproducible");
+    }
+
+    #[test]
+    fn test_session_serialization_is_deterministic() {
+        let (mut alice_session, mut bob_session) = create_test_session_pair();
+
+        // Leave skipped message keys behind: send several, deliver only the last.
+        let msgs: Vec<_> = (0..5)
+            .map(|i| alice_session.encrypt(format!("m{i}").as_bytes()).unwrap())
+            .collect();
+        bob_session.decrypt(&msgs[4]).unwrap();
+
+        let first = bob_session.serialize().unwrap();
+        let second = bob_session.serialize().unwrap();
+
+        assert_eq!(first, second, "session serialization is not reproducible");
     }
 }
