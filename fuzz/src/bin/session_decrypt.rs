@@ -3,17 +3,25 @@ extern crate afl;
 use zealot::{Account, RatchetMessage, Session, X3DHPublicKeys};
 
 fn get_session() -> Session {
-    // The Victim
-    let alice = Account::new(None);
+    let a = Account::new(None);
 
-    // The Attacker context
-    let bob = Account::new(None);
-    let bob_bundle = bob.prekey_bundle();
-    let bob_public = X3DHPublicKeys::from(&bob_bundle);
+    let b = Account::new(None);
+    let b_bundle = b.prekey_bundle();
 
-    alice
-        .create_outbound_session(&bob_public)
-        .expect("Setup failed")
+    let b_public = X3DHPublicKeys::try_from(
+        b_bundle.ik_public.to_bytes(),
+        b_bundle.signing_key_public.to_bytes(),
+        (b_bundle.spk_public.0, b_bundle.spk_public.1.to_bytes()),
+        b_bundle.signature.to_bytes(),
+        b_bundle
+            .otpks_public
+            .iter()
+            .next()
+            .map(|(id, key)| (*id, key.to_bytes())),
+    )
+    .expect("Setup failed");
+
+    a.create_outbound_session(&b_public).expect("Setup failed")
 }
 
 fn main() {

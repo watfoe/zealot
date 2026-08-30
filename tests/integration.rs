@@ -3,388 +3,302 @@ mod integration_tests {
     use std::time::Duration;
     use zealot::{Account, AccountConfig, Session, X3DHPublicKeys};
 
+    /// Stands in for the server: publishes `account`'s pre-key bundle and returns
+    /// what a peer fetching it would receive - the identity and signed pre-key,
+    /// plus exactly one of the advertised one-time pre-keys. Allocating a single
+    /// one-time pre-key per fetch is the server's job, which is why this lives in
+    /// the test harness rather than in the crate.
+    fn create_test_pkb(account: &Account) -> X3DHPublicKeys {
+        let pkb = account.prekey_bundle();
+        let otpk = pkb
+            .otpks_public
+            .iter()
+            .next()
+            .map(|(id, key)| (*id, key.to_bytes()));
+        X3DHPublicKeys::try_from(
+            pkb.ik_public.to_bytes(),
+            pkb.signing_key_public.to_bytes(),
+            (pkb.spk_public.0, pkb.spk_public.1.to_bytes()),
+            pkb.signature.to_bytes(),
+            otpk,
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn test_full_protocol_flow() {
-        println!("Step 1: Creating accounts for Alice and Bob...");
-        let alice_account = Account::new(None);
-        let mut bob_account = Account::new(None);
+    fn test_full_protocol_lifecycle() {
+        let a_acc = Account::new(None);
+        let mut b_acc = Account::new(None);
 
-        println!("Step 2: Bob publishes his pre-key bundle...");
-        let bob_bundle = bob_account.prekey_bundle();
-        let bob_x3dh_keys = X3DHPublicKeys::from(&bob_bundle);
+        let b_pkb = create_test_pkb(&b_acc);
+        assert!(b_pkb.verify().is_ok(), "bundle verification failed");
 
-        println!("Step 3: Verifying Bob's pre-key bundle...");
-        assert!(bob_x3dh_keys.verify().is_ok(), "Bundle verification failed");
+        let mut a_ses = a_acc.create_outbound_session(&b_pkb).unwrap();
 
-        println!("Step 4: Alice creates outbound session to Bob...");
-        let mut alice_session = alice_account
-            .create_outbound_session(&bob_x3dh_keys)
+        let outbound_x3dh_keys = a_ses.x3dh_keys().unwrap();
+        let mut b_ses = b_acc
+            .create_inbound_session(a_acc.ik_public(), &outbound_x3dh_keys)
             .unwrap();
 
-        println!("Step 5: Bob creates inbound session from Alice...");
-        let outbound_x3dh_keys = alice_session.x3dh_keys().unwrap();
-        let mut bob_session = bob_account
-            .create_inbound_session(alice_account.ik_public(), &outbound_x3dh_keys)
-            .unwrap();
+        let a_msg_1 = "Hey Bob, this is a secure message!";
+        let ciphertext_1 = a_ses.encrypt(a_msg_1.as_bytes()).unwrap();
+        let plaintext_1 = b_ses.decrypt(&ciphertext_1).unwrap();
+        assert_eq!(String::from_utf8(plaintext_1).unwrap(), a_msg_1);
 
-        println!("Step 6: Alice sends first message...");
-        let alice_message_1 = "Hey Bob, this is a secure message!";
-        let encrypted_message_1 = alice_session.encrypt(alice_message_1.as_bytes()).unwrap();
+        let b_msg_1 = "Hi Alice! I received your secure message.";
+        let ciphertext_2 = b_ses.encrypt(b_msg_1.as_bytes()).unwrap();
+        let plaintext_2 = a_ses.decrypt(&ciphertext_2).unwrap();
+        assert_eq!(String::from_utf8(plaintext_2).unwrap(), b_msg_1);
 
-        println!("Step 7: Bob decrypts Alice's first message...");
-        let decrypted_message_1 = bob_session.decrypt(&encrypted_message_1).unwrap();
-        assert_eq!(
-            String::from_utf8(decrypted_message_1).unwrap(),
-            alice_message_1
-        );
+        let a_ser_ses = a_ses.serialize().unwrap();
+        let b_ser_ses = b_ses.serialize().unwrap();
 
-        println!("Step 8: Bob replies to Alice...");
-        let bob_message_1 = "Hi Alice! I received your secure message.";
-        let encrypted_reply_1 = bob_session.encrypt(bob_message_1.as_bytes()).unwrap();
+        let mut a_unser_ses = Session::deserialize(&a_ser_ses).unwrap();
+        let mut b_unser_ses = Session::deserialize(&b_ser_ses).unwrap();
 
-        println!("Step 9: Alice decrypts Bob's reply...");
-        let decrypted_reply_1 = alice_session.decrypt(&encrypted_reply_1).unwrap();
-        assert_eq!(String::from_utf8(decrypted_reply_1).unwrap(), bob_message_1);
+        let a_msg_2 = "How's the weather there?";
+        let ciphertext_3 = a_unser_ses.encrypt(a_msg_2.as_bytes()).unwrap();
+        let plaintext_3 = b_unser_ses.decrypt(&ciphertext_3).unwrap();
+        assert_eq!(String::from_utf8(plaintext_3).unwrap(), a_msg_2);
 
-        println!("Step 10: Testing session serialization and restoration...");
-        let alice_session_data = alice_session.serialize().unwrap();
-        let bob_session_data = bob_session.serialize().unwrap();
-
-        let mut alice_restored = Session::deserialize(&alice_session_data).unwrap();
-        let mut bob_restored = Session::deserialize(&bob_session_data).unwrap();
-
-        println!("Step 11: Testing continued communication after restoration...");
-        let alice_message_2 = "How's the weather there?";
-        let encrypted_message_2 = alice_restored.encrypt(alice_message_2.as_bytes()).unwrap();
-
-        let decrypted_message_2 = bob_restored.decrypt(&encrypted_message_2).unwrap();
-        assert_eq!(
-            String::from_utf8(decrypted_message_2).unwrap(),
-            alice_message_2
-        );
-
-        println!("Step 12: Testing out-of-order message delivery...");
-        let alice_messages = vec![
-            "Message A - should be received third",
-            "Message B - should be received first",
-            "Message C - should be received second",
+        let a_msgs = vec![
+            "Message A - third",
+            "Message B - first",
+            "Message C - second",
         ];
-        let mut encrypted_messages = Vec::new();
-
-        for msg in alice_messages.iter() {
-            encrypted_messages.push(alice_restored.encrypt(msg.as_bytes()).unwrap());
+        let mut ciphertexts = Vec::new();
+        for msg in a_msgs.iter() {
+            ciphertexts.push(a_unser_ses.encrypt(msg.as_bytes()).unwrap());
         }
 
         // Bob receives them out of order: B, C, A
-        let decrypted_b = bob_restored.decrypt(&encrypted_messages[1]).unwrap();
-        assert_eq!(String::from_utf8(decrypted_b).unwrap(), alice_messages[1]);
+        let plaintext_b = b_unser_ses.decrypt(&ciphertexts[1]).unwrap();
+        assert_eq!(String::from_utf8(plaintext_b).unwrap(), a_msgs[1]);
 
-        let decrypted_c = bob_restored.decrypt(&encrypted_messages[2]).unwrap();
-        assert_eq!(String::from_utf8(decrypted_c).unwrap(), alice_messages[2]);
+        let plaintext_c = b_unser_ses.decrypt(&ciphertexts[2]).unwrap();
+        assert_eq!(String::from_utf8(plaintext_c).unwrap(), a_msgs[2]);
 
-        let decrypted_a = bob_restored.decrypt(&encrypted_messages[0]).unwrap();
-        assert_eq!(String::from_utf8(decrypted_a).unwrap(), alice_messages[0]);
+        let plaintext_a = b_unser_ses.decrypt(&ciphertexts[0]).unwrap();
+        assert_eq!(String::from_utf8(plaintext_a).unwrap(), a_msgs[0]);
 
-        println!("Step 13: Testing multiple DH ratchet rotations...");
         for i in 0..3 {
             // Bob to Alice
-            let bob_msg = format!("Rotation test from Bob {}", i);
-            let encrypted = bob_restored.encrypt(bob_msg.as_bytes()).unwrap();
-            let decrypted = alice_restored.decrypt(&encrypted).unwrap();
-            assert_eq!(String::from_utf8(decrypted).unwrap(), bob_msg);
+            let b_msg = format!("Rotation test from Bob {i}");
+            let ciphertext = b_unser_ses.encrypt(b_msg.as_bytes()).unwrap();
+            let plaintext = a_unser_ses.decrypt(&ciphertext).unwrap();
+            assert_eq!(String::from_utf8(plaintext).unwrap(), b_msg);
 
             // Alice to Bob
-            let alice_msg = format!("Rotation test from Alice {}", i);
-            let encrypted = alice_restored.encrypt(alice_msg.as_bytes()).unwrap();
-            let decrypted = bob_restored.decrypt(&encrypted).unwrap();
-            assert_eq!(String::from_utf8(decrypted).unwrap(), alice_msg);
+            let a_msg = format!("Rotation test from Alice {i}");
+            let ciphertext = a_unser_ses.encrypt(a_msg.as_bytes()).unwrap();
+            let plaintext = b_unser_ses.decrypt(&ciphertext).unwrap();
+            assert_eq!(String::from_utf8(plaintext).unwrap(), a_msg);
         }
 
-        println!("Step 15: Testing large message...");
-        let large_message = vec![b'X'; 100 * 1024]; // 100 KB
-        let encrypted_large = alice_restored.encrypt(&large_message).unwrap();
-        let decrypted_large = bob_restored.decrypt(&encrypted_large).unwrap();
-        assert_eq!(decrypted_large, large_message);
-
-        println!("All integration tests passed successfully!");
+        let msg = vec![b'X'; 100 * 1024]; // 100 KB
+        let ciphertext = a_unser_ses.encrypt(&msg).unwrap();
+        let plaintext = b_unser_ses.decrypt(&ciphertext).unwrap();
+        assert_eq!(plaintext, msg);
     }
 
     #[test]
     fn test_multiple_sessions() {
-        println!("Setting up accounts for Alice, Bob, and Charlie...");
-        let alice_account = Account::new(None);
-        let mut bob_account = Account::new(None);
-        let mut charlie_account = Account::new(None);
+        let a_acc = Account::new(None);
+        let mut b_acc = Account::new(None);
+        let mut c_acc = Account::new(None);
 
-        println!("Getting pre-key bundles...");
-        let bob_bundle = bob_account.prekey_bundle();
-        let bob_x3dh_keys = X3DHPublicKeys::from(&bob_bundle);
+        let b_pkb = create_test_pkb(&b_acc);
+        let c_pkb = create_test_pkb(&c_acc);
 
-        let charlie_bundle = charlie_account.prekey_bundle();
-        let charlie_x3dh_keys = X3DHPublicKeys::from(&charlie_bundle);
+        let mut a_b_out_ses = a_acc.create_outbound_session(&b_pkb).unwrap();
+        let mut a_c_out_ses = a_acc.create_outbound_session(&c_pkb).unwrap();
 
-        println!("Alice creates sessions with Bob and Charlie...");
-        let mut alice_bob_session = alice_account
-            .create_outbound_session(&bob_x3dh_keys)
-            .unwrap();
-        let mut alice_charlie_session = alice_account
-            .create_outbound_session(&charlie_x3dh_keys)
+        let a_b_x3dh_keys = a_b_out_ses.x3dh_keys().unwrap();
+        let mut a_b_in_ses = b_acc
+            .create_inbound_session(a_acc.ik_public(), &a_b_x3dh_keys)
             .unwrap();
 
-        println!("Bob and Charlie create inbound sessions...");
-        let alice_bob_x3dh_keys = alice_bob_session.x3dh_keys().unwrap();
-        let mut bob_session = bob_account
-            .create_inbound_session(alice_account.ik_public(), &alice_bob_x3dh_keys)
+        let a_c_x3dh_keys = a_c_out_ses.x3dh_keys().unwrap();
+        let mut a_c_in_ses = c_acc
+            .create_inbound_session(a_acc.ik_public(), &a_c_x3dh_keys)
             .unwrap();
 
-        let alice_charlie_x3dh_keys = alice_charlie_session.x3dh_keys().unwrap();
-        let mut charlie_session = charlie_account
-            .create_inbound_session(alice_account.ik_public(), &alice_charlie_x3dh_keys)
-            .unwrap();
+        let a_b_msg = "Hey Bob, it's Alice!";
+        let a_c_msg = "Hey Charlie, it's Alice!";
 
-        println!("Alice sends messages to Bob and Charlie...");
-        let bob_message = "Hey Bob, it's Alice!";
-        let charlie_message = "Hey Charlie, it's Alice!";
+        let a_b_ciphertext = a_b_out_ses.encrypt(a_b_msg.as_bytes()).unwrap();
+        let a_c_ciphertext = a_c_out_ses.encrypt(a_c_msg.as_bytes()).unwrap();
 
-        let encrypted_bob = alice_bob_session.encrypt(bob_message.as_bytes()).unwrap();
-        let encrypted_charlie = alice_charlie_session
-            .encrypt(charlie_message.as_bytes())
-            .unwrap();
+        let a_b_plaintext = a_b_in_ses.decrypt(&a_b_ciphertext).unwrap();
+        let a_c_plaintext = a_c_in_ses.decrypt(&a_c_ciphertext).unwrap();
 
-        println!("Bob and Charlie decrypt messages...");
-        let decrypted_bob = bob_session.decrypt(&encrypted_bob).unwrap();
-        let decrypted_charlie = charlie_session.decrypt(&encrypted_charlie).unwrap();
+        assert_eq!(String::from_utf8(a_b_plaintext).unwrap(), a_b_msg);
+        assert_eq!(String::from_utf8(a_c_plaintext).unwrap(), a_c_msg);
 
-        assert_eq!(String::from_utf8(decrypted_bob).unwrap(), bob_message);
-        assert_eq!(
-            String::from_utf8(decrypted_charlie).unwrap(),
-            charlie_message
-        );
+        let b_a_msg = "Hi Alice, it's Bob!";
+        let c_a_msg = "Hey Alice, Charlie here!";
 
-        println!("Bob and Charlie respond to Alice...");
-        let bob_reply = "Hi Alice, it's Bob!";
-        let charlie_reply = "Hey Alice, Charlie here!";
+        let b_a_ciphertext = a_b_in_ses.encrypt(b_a_msg.as_bytes()).unwrap();
+        let c_a_ciphertext = a_c_in_ses.encrypt(c_a_msg.as_bytes()).unwrap();
 
-        let encrypted_bob_reply = bob_session.encrypt(bob_reply.as_bytes()).unwrap();
-        let encrypted_charlie_reply = charlie_session.encrypt(charlie_reply.as_bytes()).unwrap();
+        let b_a_plaintext = a_b_out_ses.decrypt(&b_a_ciphertext).unwrap();
+        let c_a_plaintext = a_c_out_ses.decrypt(&c_a_ciphertext).unwrap();
 
-        println!("Alice decrypts responses...");
-        let decrypted_bob_reply = alice_bob_session.decrypt(&encrypted_bob_reply).unwrap();
-        let decrypted_charlie_reply = alice_charlie_session
-            .decrypt(&encrypted_charlie_reply)
-            .unwrap();
+        assert_eq!(String::from_utf8(b_a_plaintext).unwrap(), b_a_msg);
+        assert_eq!(String::from_utf8(c_a_plaintext).unwrap(), c_a_msg);
 
-        assert_eq!(String::from_utf8(decrypted_bob_reply).unwrap(), bob_reply);
-        assert_eq!(
-            String::from_utf8(decrypted_charlie_reply).unwrap(),
-            charlie_reply
-        );
+        let a_b_ser_ses = a_b_out_ses.serialize().unwrap();
+        let a_c_ser_ses = a_c_out_ses.serialize().unwrap();
 
-        println!("Testing session independence through serialization...");
-        let bob_session_data = alice_bob_session.serialize().unwrap();
-        let charlie_session_data = alice_charlie_session.serialize().unwrap();
-
-        let mut alice_bob_restored = Session::deserialize(&bob_session_data).unwrap();
-        let mut alice_charlie_restored = Session::deserialize(&charlie_session_data).unwrap();
+        let mut a_b_unser_ses = Session::deserialize(&a_b_ser_ses).unwrap();
+        let mut a_c_unser_ses = Session::deserialize(&a_c_ser_ses).unwrap();
 
         // Verify sessions work independently after restoration
-        let final_bob_msg = "Final message to Bob";
-        let final_charlie_msg = "Final message to Charlie";
+        let a_b_msg_2 = "New message to Bob";
+        let a_c_msg_2 = "New message to Charlie";
 
-        let encrypted_final_bob = alice_bob_restored
-            .encrypt(final_bob_msg.as_bytes())
-            .unwrap();
-        let encrypted_final_charlie = alice_charlie_restored
-            .encrypt(final_charlie_msg.as_bytes())
-            .unwrap();
+        let a_b_ciphertext_2 = a_b_unser_ses.encrypt(a_b_msg_2.as_bytes()).unwrap();
+        let a_c_ciphertext_2 = a_c_unser_ses.encrypt(a_c_msg_2.as_bytes()).unwrap();
 
-        let decrypted_final_bob = bob_session.decrypt(&encrypted_final_bob).unwrap();
-        let decrypted_final_charlie = charlie_session.decrypt(&encrypted_final_charlie).unwrap();
+        let a_b_plaintext_2 = a_b_in_ses.decrypt(&a_b_ciphertext_2).unwrap();
+        let a_c_plaintext_2 = a_c_in_ses.decrypt(&a_c_ciphertext_2).unwrap();
 
-        assert_eq!(
-            String::from_utf8(decrypted_final_bob).unwrap(),
-            final_bob_msg
-        );
-        assert_eq!(
-            String::from_utf8(decrypted_final_charlie).unwrap(),
-            final_charlie_msg
-        );
-
-        println!("Multiple session test passed successfully!");
+        assert_eq!(String::from_utf8(a_b_plaintext_2).unwrap(), a_b_msg_2);
+        assert_eq!(String::from_utf8(a_c_plaintext_2).unwrap(), a_c_msg_2);
     }
 
     #[test]
     fn test_session_resumption_after_key_loss() {
-        println!("Setting up accounts for Alice and Bob...");
-        let alice_account = Account::new(None);
-        let mut bob_account = Account::new(None);
+        let a_acc = Account::new(None);
+        let mut b_acc = Account::new(None);
 
-        println!("Establishing initial session...");
-        let bob_bundle = bob_account.prekey_bundle();
-        let bob_x3dh_keys = X3DHPublicKeys::from(&bob_bundle);
+        let b_x3dh_keys = create_test_pkb(&b_acc);
 
-        let mut alice_session = alice_account
-            .create_outbound_session(&bob_x3dh_keys)
-            .unwrap();
-        let outbound_x3dh_keys = alice_session.x3dh_keys().unwrap();
-        let mut bob_session = bob_account
-            .create_inbound_session(alice_account.ik_public(), &outbound_x3dh_keys)
+        let mut a_ses = a_acc.create_outbound_session(&b_x3dh_keys).unwrap();
+        let outbound_x3dh_keys = a_ses.x3dh_keys().unwrap();
+        let mut b_ses = b_acc
+            .create_inbound_session(a_acc.ik_public(), &outbound_x3dh_keys)
             .unwrap();
 
-        println!("Exchange a few messages to advance the ratchet...");
         for i in 0..3 {
             // Alice to Bob
-            let msg = format!("Message {}", i);
-            let encrypted = alice_session.encrypt(msg.as_bytes()).unwrap();
-            let decrypted = bob_session.decrypt(&encrypted).unwrap();
-            assert_eq!(String::from_utf8(decrypted).unwrap(), msg);
+            let msg = format!("Message {i}");
+            let ciphertext = a_ses.encrypt(msg.as_bytes()).unwrap();
+            let plaintext = b_ses.decrypt(&ciphertext).unwrap();
+            assert_eq!(String::from_utf8(plaintext).unwrap(), msg);
 
             // Bob to Alice
-            let reply = format!("Reply {}", i);
-            let encrypted_reply = bob_session.encrypt(reply.as_bytes()).unwrap();
-            let decrypted_reply = alice_session.decrypt(&encrypted_reply).unwrap();
-            assert_eq!(String::from_utf8(decrypted_reply).unwrap(), reply);
+            let msg = format!("Reply {i}");
+            let ciphertext = b_ses.encrypt(msg.as_bytes()).unwrap();
+            let plaintext = a_ses.decrypt(&ciphertext).unwrap();
+            assert_eq!(String::from_utf8(plaintext).unwrap(), msg);
         }
 
-        println!("Simulating Bob's session loss by creating new account...");
         // Bob loses his session state and creates a new account with fresh keys
-        let mut bob_new_account = Account::new(None);
+        let mut b_new_acc = Account::new(None);
 
         // Bob publishes new pre-key bundle
-        let bob_new_bundle = bob_new_account.prekey_bundle();
-        let bob_new_x3dh_keys = X3DHPublicKeys::from(&bob_new_bundle);
+        let b_new_x3dh_keys = create_test_pkb(&b_new_acc);
 
-        println!("Alice initiates new session with Bob's new keys...");
-        let mut alice_new_session = alice_account
-            .create_outbound_session(&bob_new_x3dh_keys)
+        let mut a_new_ses = a_acc.create_outbound_session(&b_new_x3dh_keys).unwrap();
+
+        let new_outbound_x3dh_keys = a_new_ses.x3dh_keys().unwrap();
+        let mut b_new_ses = b_new_acc
+            .create_inbound_session(a_acc.ik_public(), &new_outbound_x3dh_keys)
             .unwrap();
 
-        let new_outbound_x3dh_keys = alice_new_session.x3dh_keys().unwrap();
-        let mut bob_new_session = bob_new_account
-            .create_inbound_session(alice_account.ik_public(), &new_outbound_x3dh_keys)
-            .unwrap();
+        let a_msg_2 = "Hey Bob, reconnecting with you!";
+        let a_ciphertext_2 = a_new_ses.encrypt(a_msg_2.as_bytes()).unwrap();
+        let a_plaintext_2 = b_new_ses.decrypt(&a_ciphertext_2).unwrap();
 
-        println!("Testing resumed communication...");
-        let resumption_message = "Hey Bob, I'm reconnecting with you!";
-        let encrypted_resumption = alice_new_session
-            .encrypt(resumption_message.as_bytes())
-            .unwrap();
+        assert_eq!(String::from_utf8(a_plaintext_2).unwrap(), a_msg_2);
 
-        let decrypted_resumption = bob_new_session.decrypt(&encrypted_resumption).unwrap();
+        let b_msg_2 = "Welcome back, Alice!";
+        let b_ciphertext_2 = b_new_ses.encrypt(b_msg_2.as_bytes()).unwrap();
+        let b_plaintext_2 = a_new_ses.decrypt(&b_ciphertext_2).unwrap();
 
-        assert_eq!(
-            String::from_utf8(decrypted_resumption).unwrap(),
-            resumption_message
-        );
+        assert_eq!(String::from_utf8(b_plaintext_2).unwrap(), b_msg_2);
 
-        let bob_welcome_back = "Welcome back, Alice!";
-        let encrypted_welcome = bob_new_session
-            .encrypt(bob_welcome_back.as_bytes())
-            .unwrap();
+        let a_ser_acc = a_acc.serialize().unwrap();
+        let b_ser_acc = b_new_acc.serialize().unwrap();
 
-        let decrypted_welcome = alice_new_session.decrypt(&encrypted_welcome).unwrap();
-
-        assert_eq!(
-            String::from_utf8(decrypted_welcome).unwrap(),
-            bob_welcome_back
-        );
-
-        println!("Testing account serialization for persistence...");
-        let alice_account_data = alice_account.serialize().unwrap();
-        let bob_new_account_data = bob_new_account.serialize().unwrap();
-
-        let alice_restored_account = Account::deserialize(&alice_account_data).unwrap();
-        let bob_restored_account = Account::deserialize(&bob_new_account_data).unwrap();
+        let a_unser_acc = Account::deserialize(&a_ser_acc).unwrap();
+        let b_unser_acc = Account::deserialize(&b_ser_acc).unwrap();
 
         // Verify accounts work after restoration
         assert_eq!(
-            alice_account.ik_public().as_bytes(),
-            alice_restored_account.ik_public().as_bytes()
+            a_acc.ik_public().as_bytes(),
+            a_unser_acc.ik_public().as_bytes()
         );
         assert_eq!(
-            bob_new_account.ik_public().as_bytes(),
-            bob_restored_account.ik_public().as_bytes()
+            b_new_acc.ik_public().as_bytes(),
+            b_unser_acc.ik_public().as_bytes()
         );
-
-        println!("Session resumption test passed successfully!");
     }
 
     #[test]
     fn test_concurrent_session_serialization() {
-        println!("Testing concurrent session operations and serialization...");
-
-        let alice_account = Account::new(None);
-        let mut bob_account = Account::new(None);
+        let a_acc = Account::new(None);
+        let mut b_acc = Account::new(None);
 
         // Create session
-        let bob_bundle = bob_account.prekey_bundle();
-        let bob_x3dh_keys = X3DHPublicKeys::from(&bob_bundle);
-        let alice_session = alice_account
-            .create_outbound_session(&bob_x3dh_keys)
-            .unwrap();
+        let b_x3dh_keys = create_test_pkb(&b_acc);
+        let a_ses = a_acc.create_outbound_session(&b_x3dh_keys).unwrap();
 
-        let outbound_x3dh_keys = alice_session.x3dh_keys().unwrap();
-        let bob_session = bob_account
-            .create_inbound_session(alice_account.ik_public(), &outbound_x3dh_keys)
+        let outbound_x3dh_keys = a_ses.x3dh_keys().unwrap();
+        let b_ses = b_acc
+            .create_inbound_session(a_acc.ik_public(), &outbound_x3dh_keys)
             .unwrap();
 
         // Simulate mobile app pattern: serialize after every operation
-        let messages = ["Message 1", "Message 2", "Message 3"];
-        let mut alice_session_data = alice_session.serialize().unwrap();
-        let mut bob_session_data = bob_session.serialize().unwrap();
+        let msgs = ["Message 1", "Message 2", "Message 3"];
+        let mut a_ser_ses = a_ses.serialize().unwrap();
+        let mut b_ser_ses = b_ses.serialize().unwrap();
 
-        for (i, msg) in messages.iter().enumerate() {
-            println!("Processing message {}: {}", i + 1, msg);
-
+        for msg in msgs.iter() {
             // Restore Alice's session, encrypt, then serialize
-            let mut alice_restored = Session::deserialize(&alice_session_data).unwrap();
-            let encrypted = alice_restored.encrypt(msg.as_bytes()).unwrap();
-            alice_session_data = alice_restored.serialize().unwrap();
+            let mut a_unser_ses = Session::deserialize(&a_ser_ses).unwrap();
+            let ciphertext = a_unser_ses.encrypt(msg.as_bytes()).unwrap();
+            a_ser_ses = a_unser_ses.serialize().unwrap();
 
             // Restore Bob's session, decrypt, then serialize
-            let mut bob_restored = Session::deserialize(&bob_session_data).unwrap();
-            let decrypted = bob_restored.decrypt(&encrypted).unwrap();
-            bob_session_data = bob_restored.serialize().unwrap();
+            let mut b_unser_ses = Session::deserialize(&b_ser_ses).unwrap();
+            let plaintext = b_unser_ses.decrypt(&ciphertext).unwrap();
+            b_ser_ses = b_unser_ses.serialize().unwrap();
 
-            assert_eq!(String::from_utf8(decrypted).unwrap(), *msg);
+            assert_eq!(String::from_utf8(plaintext).unwrap(), *msg);
         }
-
-        println!("Concurrent session serialization test passed successfully!");
     }
 
     #[test]
     fn test_account_key_rotation() {
-        println!("Testing account key rotation functionality...");
-
-        let mut alice_account = Account::new(Some(AccountConfig {
+        let mut a_acc = Account::new(Some(AccountConfig {
             spk_rotation_interval: Duration::from_millis(1),
             ..AccountConfig::default()
         }));
 
-        let initial_bundle = alice_account.prekey_bundle();
-        let initial_spk_id = initial_bundle.spk_public.0;
+        let pkb = a_acc.prekey_bundle();
+        let spk_id = pkb.spk_public.0;
 
         // Wait for rotation interval to pass
         std::thread::sleep(Duration::from_millis(10));
 
         // Trigger key rotation
-        let rotation_result = alice_account.rotate_spk();
+        let rotation_result = a_acc.rotate_spk();
         assert!(
             rotation_result.is_some(),
-            "Key rotation should have occurred"
+            "key rotation should have occurred"
         );
 
-        let (new_spk_id, _new_public_key, _signature) = rotation_result.unwrap();
-        assert_ne!(initial_spk_id, new_spk_id, "SPK ID should have changed");
+        let (new_spk_id, _new_pkb, _signature) = rotation_result.unwrap();
+        assert_ne!(spk_id, new_spk_id, "spk id should have changed");
 
         // Verify new bundle has updated keys
-        let new_bundle = alice_account.prekey_bundle();
-        assert_eq!(new_bundle.spk_public.0, new_spk_id);
+        let new_pkb = a_acc.prekey_bundle();
+        assert_eq!(new_pkb.spk_public.0, new_spk_id);
 
         // Test OTPK replenishment
-        let replenished_keys = alice_account.replenish_otpks();
+        let replenished_keys = a_acc.replenish_otpks();
         println!("Replenished {} one-time pre-keys", replenished_keys.len());
-
-        println!("Account key rotation test passed successfully!");
     }
 }

@@ -64,6 +64,7 @@ pub struct DoubleRatchet {
     pub(crate) skipped_message_keys_order: VecDeque<(Box<[u8; 32]>, u32)>,
     pub(crate) max_skip: u32,
 }
+
 impl Zeroize for DoubleRatchet {
     fn zeroize(&mut self) {
         self.state.zeroize();
@@ -76,6 +77,7 @@ impl Zeroize for DoubleRatchet {
         }
     }
 }
+
 impl Drop for DoubleRatchet {
     fn drop(&mut self) {
         self.zeroize();
@@ -561,8 +563,6 @@ impl DoubleRatchet {
         }
     }
 
-    /// Removes a skipped message key from both the store and the order tracker,
-    /// zeroizing the key material.
     fn remove_skipped_message_key(&mut self, map_key: &(Box<[u8; 32]>, u32)) {
         if let Some(mut message_key) = self.skipped_message_keys.remove(map_key) {
             message_key.zeroize();
@@ -576,7 +576,6 @@ impl DoubleRatchet {
         }
     }
 
-    /// Decrypt a message
     fn decrypt_message(key: &[u8; 32], ciphertext: &[u8], ad: &[u8]) -> Result<Vec<u8>, Error> {
         let hkdf = Hkdf::<Sha256>::new(None, key.as_slice());
 
@@ -611,8 +610,8 @@ mod tests {
     use super::*;
     use crate::SignedPreKey;
 
-    fn create_ratchets() -> (DoubleRatchet, DoubleRatchet) {
-        let bob_spk = SignedPreKey::new(1);
+    fn create_test_drs() -> (DoubleRatchet, DoubleRatchet) {
+        let b_spk = SignedPreKey::new(1);
 
         // For simplicity, let's create a dummy shared secret
         let shared_secret = generate_random_seed();
@@ -621,50 +620,45 @@ mod tests {
         SysRng.try_fill_bytes(ad.as_mut_slice()).unwrap();
 
         // Initialize ratchets
-        let alice_ratchet = DoubleRatchet::initialize_for_alice(
+        let a_dr = DoubleRatchet::initialize_for_alice(
             X3DHSharedSecret(shared_secret.clone()),
-            &bob_spk.public_key(),
+            &b_spk.public_key(),
             20,
             ad.clone(),
         );
 
-        let bob_ratchet = DoubleRatchet::initialize_for_bob(
+        let b_dr = DoubleRatchet::initialize_for_bob(
             X3DHSharedSecret(shared_secret),
-            bob_spk.key_pair(),
+            b_spk.key_pair(),
             20,
             ad,
         );
 
-        (alice_ratchet, bob_ratchet)
+        (a_dr, b_dr)
     }
 
     #[test]
     fn test_basic_communication() {
-        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+        let (mut a_dr, mut b_dr) = create_test_drs();
 
-        // Send a message from Alice to Bob
-        let alice_message = "Hello, Bob!";
-        let encrypted_message = alice_ratchet.encrypt(alice_message.as_bytes()).unwrap();
+        let a_msg = "Hello, B!";
+        let ciphertext = a_dr.encrypt(a_msg.as_bytes()).unwrap();
 
-        // Bob decrypts Alice's message
-        let decrypted = bob_ratchet.decrypt(&encrypted_message).unwrap();
-        assert_eq!(String::from_utf8(decrypted).unwrap(), alice_message);
+        let plaintext = b_dr.decrypt(&ciphertext).unwrap();
+        assert_eq!(String::from_utf8(plaintext).unwrap(), a_msg);
 
-        // Bob responds to Alice
-        let bob_message = "Hello, Alice!";
-        let encrypted_response = bob_ratchet.encrypt(bob_message.as_bytes()).unwrap();
+        let b_msg = "Hello, A!";
+        let ciphertext = b_dr.encrypt(b_msg.as_bytes()).unwrap();
 
-        // Alice decrypts Bob's response
-        let decrypted_response = alice_ratchet.decrypt(&encrypted_response).unwrap();
-        assert_eq!(String::from_utf8(decrypted_response).unwrap(), bob_message);
+        let plaintext = a_dr.decrypt(&ciphertext).unwrap();
+        assert_eq!(String::from_utf8(plaintext).unwrap(), b_msg);
     }
 
     #[test]
     fn test_multiple_messages() {
-        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+        let (mut a_dr, mut b_dr) = create_test_drs();
 
-        // Send multiple messages from Alice to Bob
-        let messages = vec![
+        let msgs = vec![
             "Message 1",
             "Message 2",
             "Message 3",
@@ -672,228 +666,211 @@ mod tests {
             "Message 5",
         ];
 
-        for msg in &messages {
-            let encrypted = alice_ratchet.encrypt(msg.as_bytes()).unwrap();
-            let decrypted = bob_ratchet.decrypt(&encrypted).unwrap();
-            assert_eq!(String::from_utf8(decrypted).unwrap(), *msg);
+        for msg in &msgs {
+            let ciphertext = a_dr.encrypt(msg.as_bytes()).unwrap();
+            let plaintext = b_dr.decrypt(&ciphertext).unwrap();
+            assert_eq!(String::from_utf8(plaintext).unwrap(), *msg);
         }
 
-        // Send multiple messages from Bob to Alice
         let responses = vec!["Response 1", "Response 2", "Response 3"];
 
         for msg in &responses {
-            let encrypted = bob_ratchet.encrypt(msg.as_bytes()).unwrap();
-            let decrypted = alice_ratchet.decrypt(&encrypted).unwrap();
-            assert_eq!(String::from_utf8(decrypted).unwrap(), *msg);
+            let ciphertext = b_dr.encrypt(msg.as_bytes()).unwrap();
+            let plaintext = a_dr.decrypt(&ciphertext).unwrap();
+            assert_eq!(String::from_utf8(plaintext).unwrap(), *msg);
         }
     }
 
     #[test]
     fn test_out_of_order_messages() {
-        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+        let (mut a_dr, mut b_dr) = create_test_drs();
 
-        // Alice sends multiple messages
-        let messages = vec![
+        let msgs = vec![
             "Message 1",
             "Message 2",
             "Message 3",
             "Message 4",
             "Message 5",
         ];
-        let mut encrypted_messages = Vec::new();
+        let mut ciphertexts = Vec::new();
 
-        for msg in &messages {
-            encrypted_messages.push(alice_ratchet.encrypt(msg.as_bytes()).unwrap());
+        for msg in &msgs {
+            ciphertexts.push(a_dr.encrypt(msg.as_bytes()).unwrap());
         }
 
         // Bob receives them out of order: 0, 2, 1, 4, 3
-        let decrypted1 = bob_ratchet.decrypt(&encrypted_messages[0].clone()).unwrap();
-        assert_eq!(String::from_utf8(decrypted1).unwrap(), messages[0]);
+        let plaintext1 = b_dr.decrypt(&ciphertexts[0].clone()).unwrap();
+        assert_eq!(String::from_utf8(plaintext1).unwrap(), msgs[0]);
 
-        let decrypted3 = bob_ratchet.decrypt(&encrypted_messages[2].clone()).unwrap();
-        assert_eq!(String::from_utf8(decrypted3).unwrap(), messages[2]);
+        let plaintext3 = b_dr.decrypt(&ciphertexts[2].clone()).unwrap();
+        assert_eq!(String::from_utf8(plaintext3).unwrap(), msgs[2]);
 
-        let decrypted5 = bob_ratchet.decrypt(&encrypted_messages[4].clone()).unwrap();
-        assert_eq!(String::from_utf8(decrypted5).unwrap(), messages[4]);
+        let plaintext5 = b_dr.decrypt(&ciphertexts[4].clone()).unwrap();
+        assert_eq!(String::from_utf8(plaintext5).unwrap(), msgs[4]);
 
-        let decrypted2 = bob_ratchet.decrypt(&encrypted_messages[1].clone()).unwrap();
-        assert_eq!(String::from_utf8(decrypted2).unwrap(), messages[1]);
+        let plaintext2 = b_dr.decrypt(&ciphertexts[1].clone()).unwrap();
+        assert_eq!(String::from_utf8(plaintext2).unwrap(), msgs[1]);
 
-        let decrypted4 = bob_ratchet.decrypt(&encrypted_messages[3].clone()).unwrap();
-        assert_eq!(String::from_utf8(decrypted4).unwrap(), messages[3]);
+        let plaintext4 = b_dr.decrypt(&ciphertexts[3].clone()).unwrap();
+        assert_eq!(String::from_utf8(plaintext4).unwrap(), msgs[3]);
     }
 
     #[test]
-    fn test_key_rotation() {
-        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+    fn test_dh_key_rotation() {
+        let (mut a_dr, mut b_dr) = create_test_drs();
 
         // Initial message exchange to establish the ratchet
-        let alice_message = "Hello, Bob!";
-        let encrypted_message = alice_ratchet.encrypt(alice_message.as_bytes()).unwrap();
-        let decrypted = bob_ratchet.decrypt(&encrypted_message).unwrap();
-        assert_eq!(String::from_utf8(decrypted).unwrap(), alice_message);
+        let a_msg = "Hello, B!";
+        let ciphertext = a_dr.encrypt(a_msg.as_bytes()).unwrap();
+        let plaintext = b_dr.decrypt(&ciphertext).unwrap();
+        assert_eq!(String::from_utf8(plaintext).unwrap(), a_msg);
 
         // Save current ratchet state for later comparison
-        let alice_initial_public = alice_ratchet.public_key();
+        let a_public_1 = a_dr.public_key();
 
         // Send multiple messages back and forth to trigger key rotation
         for i in 0..5 {
-            // Bob to Alice
-            let bob_msg = format!("Message from Bob {}", i);
-            let encrypted = bob_ratchet.encrypt(bob_msg.as_bytes()).unwrap();
-            let decrypted = alice_ratchet.decrypt(&encrypted).unwrap();
-            assert_eq!(String::from_utf8(decrypted).unwrap(), bob_msg);
+            let b_msg = format!("Message from B {i}");
+            let ciphertext = b_dr.encrypt(b_msg.as_bytes()).unwrap();
+            let plaintext = a_dr.decrypt(&ciphertext).unwrap();
+            assert_eq!(String::from_utf8(plaintext).unwrap(), b_msg);
 
-            // Alice to Bob
-            let alice_msg = format!("Message from Alice {}", i);
-            let encrypted = alice_ratchet.encrypt(alice_msg.as_bytes()).unwrap();
-            let decrypted = bob_ratchet.decrypt(&encrypted).unwrap();
-            assert_eq!(String::from_utf8(decrypted).unwrap(), alice_msg);
+            let a_msg = format!("Message from A {i}");
+            let ciphertext = a_dr.encrypt(a_msg.as_bytes()).unwrap();
+            let plaintext = b_dr.decrypt(&ciphertext).unwrap();
+            assert_eq!(String::from_utf8(plaintext).unwrap(), a_msg);
         }
 
-        // Verify that Alice's public key has changed (indicating DH ratchet turned)
-        let alice_final_public = alice_ratchet.public_key();
+        let a_public_2 = a_dr.public_key();
         assert_ne!(
-            alice_initial_public.as_bytes(),
-            alice_final_public.as_bytes(),
-            "DH keys should have rotated during the conversation"
+            a_public_1.as_bytes(),
+            a_public_2.as_bytes(),
+            "dh keys should have rotated"
         );
     }
 
     #[test]
-    fn test_large_message() {
-        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+    fn test_large_message_payload() {
+        let (mut a_dr, mut b_dr) = create_test_drs();
 
-        // Create a large message (100KB)
-        let large_message = vec![b'A'; 100 * 1024];
+        let msg = vec![b'A'; 100 * 1024]; // 100Kb
 
-        // Encrypt and decrypt
-        let encrypted = alice_ratchet.encrypt(&large_message).unwrap();
-        let decrypted = bob_ratchet.decrypt(&encrypted).unwrap();
+        let ciphertext = a_dr.encrypt(&msg).unwrap();
+        let plaintext = b_dr.decrypt(&ciphertext).unwrap();
 
-        assert_eq!(decrypted, large_message);
+        assert_eq!(plaintext, msg);
     }
 
     #[test]
-    fn test_empty_message() {
-        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+    fn test_empty_message_payload() {
+        let (mut a_dr, mut b_dr) = create_test_drs();
 
-        let empty_message = b"";
-        let encrypted = alice_ratchet.encrypt(empty_message).unwrap();
-        let decrypted = bob_ratchet
-            .decrypt(&encrypted)
+        let msg = b"";
+        let ciphertext = a_dr.encrypt(msg).unwrap();
+        let plaintext = b_dr
+            .decrypt(&ciphertext)
             .map_err(|err| {
                 println!("{}", err.to_string());
                 err
             })
             .unwrap();
 
-        assert_eq!(decrypted, empty_message);
+        assert_eq!(plaintext, msg);
     }
 
     #[test]
     fn test_too_many_skipped_messages() {
-        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+        let (mut a_dr, mut b_dr) = create_test_drs();
 
-        // Set a very low max_skip value for testing
-        bob_ratchet.max_skip = 2;
+        b_dr.max_skip = 2;
 
-        // Alice sends multiple messages
-        let mut encrypted_messages = Vec::new();
+        let mut ciphertexts = Vec::new();
         for i in 0..5 {
-            let msg = format!("Message {}", i);
-            encrypted_messages.push(alice_ratchet.encrypt(msg.as_bytes()).unwrap());
+            let msg = format!("Message {i}");
+            ciphertexts.push(a_dr.encrypt(msg.as_bytes()).unwrap());
         }
 
-        // Bob receives first message
-        let _ = bob_ratchet.decrypt(&encrypted_messages[0].clone()).unwrap();
+        // B receives first message
+        let _ = b_dr.decrypt(&ciphertexts[0].clone()).unwrap();
 
-        // Bob tries to decrypt message 4 (skipping 3 messages, which exceeds max_skip=2)
-        let result = bob_ratchet.decrypt(&encrypted_messages[4].clone());
+        // B tries to decrypt message 4 (skipping 3 messages, which exceeds max_skip=2)
+        let result = b_dr.decrypt(&ciphertexts[4].clone());
         assert_eq!(result, Err(Error::TooManySkipped));
 
         // But message 3 should work (skipping 2 messages)
-        let result = bob_ratchet.decrypt(&encrypted_messages[3].clone());
+        let result = b_dr.decrypt(&ciphertexts[3].clone());
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_header_key_mismatch_error() {
-        let (_, mut bob_ratchet) = create_ratchets();
+        let (_, mut b_dr) = create_test_drs();
         // A second, unrelated pair has different header keys.
-        let (mut other_alice, _) = create_ratchets();
+        let (mut a_dr, _) = create_test_drs();
 
-        let foreign = other_alice.encrypt(b"not for bob").unwrap();
+        let wrong_ciphertext = a_dr.encrypt(b"Not for B").unwrap();
 
-        // Bob can decrypt neither with his current nor next receiving header key.
-        assert_eq!(bob_ratchet.decrypt(&foreign), Err(Error::HeaderKeyMismatch));
+        assert_eq!(
+            b_dr.decrypt(&wrong_ciphertext),
+            Err(Error::HeaderKeyMismatch)
+        );
     }
 
     #[test]
     fn test_duplicate_message_error() {
-        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+        let (mut a_dr, mut b_dr) = create_test_drs();
 
-        let message = alice_ratchet.encrypt(b"hello").unwrap();
+        let message = a_dr.encrypt(b"hello, world!").unwrap();
 
-        // First delivery succeeds.
-        assert!(bob_ratchet.decrypt(&message).is_ok());
-
-        // Re-delivering the same (already processed) message is reported distinctly.
-        assert_eq!(bob_ratchet.decrypt(&message), Err(Error::DuplicateMessage));
+        assert!(b_dr.decrypt(&message).is_ok());
+        assert_eq!(b_dr.decrypt(&message), Err(Error::DuplicateMessage));
     }
 
     #[test]
     fn test_tampered_ciphertext_error() {
-        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+        let (mut a_dr, mut b_dr) = create_test_drs();
 
-        let mut message = alice_ratchet.encrypt(b"hello").unwrap();
+        let mut message = a_dr.encrypt(b"hello, world!").unwrap();
         // The header still authenticates, but the body no longer does.
         message.ciphertext[0] ^= 0xFF;
 
-        assert_eq!(
-            bob_ratchet.decrypt(&message),
-            Err(Error::MessageDecryptionFailed)
-        );
+        assert_eq!(b_dr.decrypt(&message), Err(Error::MessageDecryptionFailed));
     }
 
     #[test]
     fn test_skipped_message_keys_are_bounded() {
-        let (mut alice_ratchet, mut bob_ratchet) = create_ratchets();
+        let (mut a_dr, mut b_dr) = create_test_drs();
 
         // Allow a single jump to skip more messages than the store can hold, so
         // the per-jump `max_skip` cap can't hide the total-store bound.
         let total = MAX_SKIPPED_MESSAGE_KEYS + 100;
-        bob_ratchet.max_skip = total as u32;
+        b_dr.max_skip = total as u32;
 
-        // Alice sends messages numbered 0..=total, all on the same chain.
-        let mut encrypted = Vec::with_capacity(total + 1);
+        // A sends messages numbered 0..=total, all on the same chain.
+        let mut ciphertexts = Vec::with_capacity(total + 1);
         for i in 0..=total {
             let msg = format!("Message {i}");
-            encrypted.push(alice_ratchet.encrypt(msg.as_bytes()).unwrap());
+            ciphertexts.push(a_dr.encrypt(msg.as_bytes()).unwrap());
         }
 
-        // Bob jumps straight to the last message. Decrypting it generates skipped
-        // keys for messages 0..total (that's `total` keys), which must be capped.
-        let decrypted = bob_ratchet.decrypt(&encrypted[total].clone()).unwrap();
+        // B jumps straight to the last message. Decrypting it generates skipped
+        // keys for messages 0..total which must be bounded.
+        let plaintexts = b_dr.decrypt(&ciphertexts[total].clone()).unwrap();
         assert_eq!(
-            String::from_utf8(decrypted).unwrap(),
+            String::from_utf8(plaintexts).unwrap(),
             format!("Message {total}")
         );
 
-        // The store never exceeds the cap, and the order tracker stays in sync.
+        assert_eq!(b_dr.skipped_message_keys.len(), MAX_SKIPPED_MESSAGE_KEYS);
         assert_eq!(
-            bob_ratchet.skipped_message_keys.len(),
-            MAX_SKIPPED_MESSAGE_KEYS
-        );
-        assert_eq!(
-            bob_ratchet.skipped_message_keys_order.len(),
+            b_dr.skipped_message_keys_order.len(),
             MAX_SKIPPED_MESSAGE_KEYS
         );
 
         // The oldest keys were evicted: message 0 can no longer be recovered,
         // while the newest retained key (message `total - 1`) still can.
-        assert!(bob_ratchet.decrypt(&encrypted[0].clone()).is_err());
-        let recovered = bob_ratchet.decrypt(&encrypted[total - 1].clone()).unwrap();
+        assert!(b_dr.decrypt(&ciphertexts[0].clone()).is_err());
+        let recovered = b_dr.decrypt(&ciphertexts[total - 1].clone()).unwrap();
         assert_eq!(
             String::from_utf8(recovered).unwrap(),
             format!("Message {}", total - 1)

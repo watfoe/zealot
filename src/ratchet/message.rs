@@ -56,7 +56,7 @@ pub struct RatchetMessage {
 impl RatchetMessage {
     /// Serializes the message to bytes for transmission.
     ///
-    /// Format: [header length (4 bytes)][header][ciphertext]
+    /// Format: `[header length (4 bytes)][header][ciphertext]`
     pub fn to_bytes(self) -> Vec<u8> {
         // Format: [header length][header][ciphertext]
         let mut result = Vec::with_capacity(4 + self.header.len() + self.ciphertext.len());

@@ -33,7 +33,7 @@ Fuzzes the `RatchetMessage::from_bytes` deserializer.
 
 ```bash
 # 1. Create directories and seed
-$mkdir -p in/msg_decode out/msg_decode$ echo "seed" > in/msg_decode/seed.txt
+$ mkdir -p in/msg_decode out/msg_decode$ echo "seed" > in/msg_decode/seed.txt
 
 # 2. Run the fuzzer
 $ cargo afl fuzz -i in/msg_decode -o out/msg_decode target/debug/msg_decode

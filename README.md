@@ -8,6 +8,9 @@ A Rust implementation of the Signal Protocol for secure, end-to-end encrypted me
 - **Double Ratchet Algorithm**: Provides forward secrecy and break-in recovery
 - **Identity Key Management**: Long-term identity keys for authentication
 - **Pre-Key Bundles**: Signed pre-keys and one-time pre-keys for session establishment
+- **Independent Session Management**: Sessions can be managed separately from accounts
+- **Granular Serialization**: Accounts and sessions can be serialized independently
+- **Concurrent Message Processing**: Multiple sessions can encrypt/decrypt concurrently
 
 ## Security Properties
 
@@ -34,14 +37,33 @@ let config = AccountConfig {
     max_skipped_messages: 10,
     protocol_info: b"com.example.secureapp".to_vec(),
 };
-let mut alice = Account::new(Some(config.clone())).unwrap();
+let mut alice = Account::new(Some(config.clone()));
 
 // Create Bob's account
-let mut bob = Account::new(Some(config)).unwrap();
+let mut bob = Account::new(Some(config)); // Use default config
 
-// Bob publishes his pre-key bundle
+// Bob publishes his pre-key bundle: his identity key, his signed pre-key, and
+// the pool of one-time pre-keys he currently has available.
 let bob_bundle = bob.prekey_bundle();
-let bob_x3dh_keys = X3DHPublicKeys::from(&bob_bundle);
+
+// A server holds that bundle and answers each fetch with a single one-time
+// pre-key claimed from the pool, never handing the same one out twice. That
+// allocation is what makes a one-time pre-key one-time, and it belongs to
+// your transport rather than to this crate, so you assemble the result here.
+let (otpk_id, otpk_public) = bob_bundle
+    .otpks_public
+    .iter()
+    .next()
+    .map(|(id, key)| (*id, key.to_bytes()))
+    .expect("Bob published at least one one-time pre-key");
+
+let bob_x3dh_keys = X3DHPublicKeys::try_from(
+    bob_bundle.ik_public.to_bytes(),
+    bob_bundle.signing_key_public.to_bytes(),
+    (bob_bundle.spk_public.0, bob_bundle.spk_public.1.to_bytes()),
+    bob_bundle.signature.to_bytes(),
+    Some((otpk_id, otpk_public)),
+).expect("Bob's bundle should be well formed");
 
 // Alice creates a session with Bob
 let mut alice_session = alice.create_outbound_session(&bob_x3dh_keys)
@@ -50,18 +72,17 @@ let mut alice_session = alice.create_outbound_session(&bob_x3dh_keys)
 // Bob processes Alice's session initiation
 let outbound_x3dh_keys = alice_session.x3dh_keys().unwrap();
 let mut bob_session = bob.create_inbound_session(
-    &alice.ik_public(),
+    alice.ik_public(),
     &outbound_x3dh_keys
 ).unwrap();
 
 // Alice encrypts a message
 let message = "Hello Bob! This is a secure message.";
-let associated_data = b"message-id-12345";
-let encrypted_message = alice_session.encrypt(message.as_bytes(), associated_data)
+let encrypted_message = alice_session.encrypt(message.as_bytes())
     .expect("Encryption failed");
 
 // Bob decrypts the message
-let decrypted_message = bob_session.decrypt(&encrypted_message, associated_data)
+let decrypted_message = bob_session.decrypt(&encrypted_message)
     .expect("Decryption failed");
 
 assert_eq!(String::from_utf8(decrypted_message).unwrap(), message);
