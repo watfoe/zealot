@@ -118,6 +118,12 @@ impl Zeroize for IdentityKey {
     }
 }
 
+impl Drop for IdentityKey {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 impl ZeroizeOnDrop for IdentityKey {}
 
 #[cfg(test)]

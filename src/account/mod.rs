@@ -170,11 +170,6 @@ impl Account {
     /// - **Session committed, account lost:** the one-time pre-key survives in
     ///   the durable account and can be consumed a second time, enabling
     ///   one-time-pre-key reuse and weakening forward secrecy.
-    ///
-    /// Persisting both in one atomic transaction is the only way to avoid both; the
-    /// library cannot enforce it because the storage boundary lives in the
-    /// caller.
-    ///
     /// # Errors
     ///
     /// Returns [`Error::PreKey`] if the referenced signed pre-key id or
@@ -182,15 +177,15 @@ impl Account {
     pub fn create_inbound_session(
         &mut self,
         alice_ik_public: X25519PublicKey,
-        outbound_session_x3dhkeys: &OutboundSessionX3DHKeys,
+        outbound_session_x3dh_keys: &OutboundSessionX3DHKeys,
     ) -> Result<Session, Error> {
-        let spk = if let Some(spk) = self.spk_store.get(outbound_session_x3dhkeys.spk_id) {
+        let spk = if let Some(spk) = self.spk_store.get(outbound_session_x3dh_keys.spk_id) {
             spk
         } else {
-            return Err(Error::PreKey("Invalid signed pre-key ID".to_string()));
+            return Err(Error::PreKey("Invalid signed pre-key Id".to_string()));
         };
 
-        let otpk = if let Some(id) = outbound_session_x3dhkeys.otpk_id {
+        let otpk = if let Some(id) = outbound_session_x3dh_keys.otpk_id {
             Some(
                 self.otpk_store
                     .take(id)
@@ -207,7 +202,7 @@ impl Account {
             spk,
             otpk.clone(),
             &alice_ik_public,
-            &outbound_session_x3dhkeys.ephemeral_key_public,
+            &outbound_session_x3dh_keys.ephemeral_key_public,
         ) {
             Ok(shared_secret) => shared_secret,
             Err(err) => {
@@ -227,7 +222,7 @@ impl Account {
         let session_id = Self::derive_session_id(
             &alice_ik_public,
             &self.ik_public(),
-            &outbound_session_x3dhkeys.ephemeral_key_public,
+            &outbound_session_x3dh_keys.ephemeral_key_public,
         );
         let session = Session::new(session_id, alice_ik_public, ratchet, None);
 
@@ -291,23 +286,17 @@ impl Account {
     }
 }
 
-impl From<&AccountPreKeyBundle> for X3DHPublicKeys {
-    fn from(value: &AccountPreKeyBundle) -> Self {
-        Self {
-            ik_public: value.ik_public,
-            signing_key_public: value.signing_key_public,
-            spk_public: (value.spk_public.0, value.spk_public.1),
-            signature: value.signature,
-            otpk_public: None,
-        }
-    }
-}
-
 impl Zeroize for Account {
     fn zeroize(&mut self) {
         self.ik.zeroize();
         self.spk_store.zeroize();
         self.otpk_store.zeroize();
+    }
+}
+
+impl Drop for Account {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 
@@ -319,26 +308,52 @@ mod tests {
     use crate::{Account, X3DHPublicKeys};
     use std::time::Duration;
 
+    fn create_test_pkb_with_otpk(account: &Account) -> (X3DHPublicKeys, u32) {
+        let pkb = account.prekey_bundle();
+        let (otpk_id, otpk_pub) = {
+            let (id, pk) = pkb.otpks_public.iter().next().unwrap();
+            (*id, *pk)
+        };
+        let public = X3DHPublicKeys::try_from(
+            pkb.ik_public.to_bytes(),
+            pkb.signing_key_public.to_bytes(),
+            (pkb.spk_public.0, pkb.spk_public.1.to_bytes()),
+            pkb.signature.to_bytes(),
+            Some((otpk_id, otpk_pub.to_bytes())),
+        )
+        .unwrap();
+        (public, otpk_id)
+    }
+
+    fn create_test_pkb_without_otpk(account: &Account) -> X3DHPublicKeys {
+        let pkb = account.prekey_bundle();
+        X3DHPublicKeys::try_from(
+            pkb.ik_public.to_bytes(),
+            pkb.signing_key_public.to_bytes(),
+            (pkb.spk_public.0, pkb.spk_public.1.to_bytes()),
+            pkb.signature.to_bytes(),
+            None,
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn test_account_key_bundle_generation() {
-        let account = Account::new(None);
+    fn test_account_pkb_generation() {
+        let a = Account::new(None);
 
-        let account_bundle = account.prekey_bundle();
-        let prekey_bundle = X3DHPublicKeys::from(&account_bundle);
+        let a_bundle = a.prekey_bundle();
+        let (pkb, _) = create_test_pkb_with_otpk(&a);
 
-        assert!(
-            prekey_bundle.verify().is_ok(),
-            "Key bundle should have valid signature"
-        );
+        assert!(pkb.verify().is_ok(), "pkb should have valid signature");
 
         assert!(
-            !account_bundle.otpks_public.is_empty(),
-            "Should have generated one-time pre keys"
+            !a_bundle.otpks_public.is_empty(),
+            "otpks should have been generated"
         );
     }
 
     #[test]
-    fn test_key_rotation() {
+    fn test_spk_key_rotation() {
         let config = AccountConfig {
             spk_rotation_interval: Duration::from_millis(1),
             ..AccountConfig::default()
@@ -346,125 +361,140 @@ mod tests {
 
         let mut account = Account::new(Some(config));
 
-        let initial_bundle = account.prekey_bundle();
-        let initial_spk_id = initial_bundle.spk_public.0;
+        let pkb = account.prekey_bundle();
+        let spk_id_1 = pkb.spk_public.0;
 
         std::thread::sleep(Duration::from_millis(10));
 
-        let (new_spk_id, _, _) = account.rotate_spk().unwrap();
+        let (spk_id_2, _, _) = account.rotate_spk().unwrap();
 
-        assert_ne!(
-            initial_spk_id, new_spk_id,
-            "Signed pre-key should have been rotated"
-        );
+        assert_ne!(spk_id_1, spk_id_2, "spk should have been rotated");
     }
 
     #[test]
     fn test_session_consistency_and_identity_binding() {
-        let alice = Account::new(None);
-        let mut bob = Account::new(None);
+        let a_acc = Account::new(None);
+        let mut b_acc = Account::new(None);
 
-        let bob_bundle = bob.prekey_bundle();
-        let bob_public = X3DHPublicKeys::from(&bob_bundle);
+        let (b_pkb, _) = create_test_pkb_with_otpk(&b_acc);
 
-        let alice_session = alice.create_outbound_session(&bob_public).unwrap();
+        let a_ses = a_acc.create_outbound_session(&b_pkb).unwrap();
+        let a_ik = a_acc.ik_public();
 
-        let alice_ik = alice.ik_public();
-        let x3dh_msg = alice_session
-            .x3dh_keys()
-            .expect("Alice should have X3DH keys");
+        let x3dh_msg = a_ses.x3dh_keys().expect("a should have X3DH keys");
 
-        let bob_session = bob.create_inbound_session(alice_ik, &x3dh_msg).unwrap();
+        let b_ses = b_acc.create_inbound_session(a_ik, &x3dh_msg).unwrap();
 
         assert_eq!(
-            alice_session.session_id(),
-            bob_session.session_id(),
-            "Session IDs mismatch! Canonical ordering (Initiator vs Responder) is likely wrong."
+            a_ses.session_id(),
+            b_ses.session_id(),
+            "session id mismatch"
         );
-        println!("Session ID: {}", alice_session.session_id());
+        println!("session id: {}", a_ses.session_id());
 
         assert_eq!(
-            alice_session.ratchet.state.ad, bob_session.ratchet.state.ad,
-            "Associated Data (AD) mismatch! Identity Keys are not binding correctly."
+            a_ses.ratchet.state.ad, b_ses.ratchet.state.ad,
+            "associated-data (AD) mismatch"
         );
 
-        let alice_bytes = alice.ik_public().to_bytes();
-        let bob_bytes = bob.ik_public().to_bytes();
+        let a_bytes = a_acc.ik_public().to_bytes();
+        let b_bytes = b_acc.ik_public().to_bytes();
 
-        let ad = alice_session.ratchet.state.ad;
-        assert_eq!(
-            &ad[0..32],
-            &alice_bytes,
-            "AD first half should be Initiator (Alice)"
-        );
-        assert_eq!(
-            &ad[32..64],
-            &bob_bytes,
-            "AD second half should be Responder (Bob)"
-        );
-    }
-
-    /// Builds an X3DH bundle for `account` that advertises one of its one-time
-    /// pre-keys, returning the bundle and the chosen pre-key id.
-    fn bundle_with_otpk(account: &Account) -> (X3DHPublicKeys, u32) {
-        let bundle = account.prekey_bundle();
-        let (otpk_id, otpk_pub) = {
-            let (id, pk) = bundle.otpks_public.iter().next().unwrap();
-            (*id, *pk)
-        };
-        let public = X3DHPublicKeys::new(
-            bundle.ik_public,
-            bundle.signing_key_public,
-            bundle.signature,
-            bundle.spk_public,
-            Some((otpk_id, otpk_pub)),
-        );
-        (public, otpk_id)
+        let ad = &a_ses.ratchet.state.ad;
+        assert_eq!(&ad[0..32], &a_bytes, "ad first half should be for a");
+        assert_eq!(&ad[32..64], &b_bytes, "ad second half should be for b");
     }
 
     #[test]
-    fn test_inbound_session_success_consumes_one_time_pre_key() {
-        let alice = Account::new(None);
-        let mut bob = Account::new(None);
+    fn test_inbound_session_success_consumes_otpk() {
+        let a_acc = Account::new(None);
+        let mut b_acc = Account::new(None);
 
-        let (bob_public, otpk_id) = bundle_with_otpk(&bob);
-        let alice_session = alice.create_outbound_session(&bob_public).unwrap();
-        let x3dh_keys = alice_session.x3dh_keys().unwrap();
+        let (b_pkb, otpk_id) = create_test_pkb_with_otpk(&b_acc);
+        let a_ses = a_acc.create_outbound_session(&b_pkb).unwrap();
+        let x3dh_keys = a_ses.x3dh_keys().unwrap();
+
         assert_eq!(x3dh_keys.otpk_id, Some(otpk_id));
 
-        let count_before = bob.otpk_store.count();
-        bob.create_inbound_session(alice.ik_public(), &x3dh_keys)
+        let otpk_count = b_acc.otpk_store.count();
+        let mut b_sess = b_acc
+            .create_inbound_session(a_acc.ik_public(), &x3dh_keys)
             .unwrap();
 
-        // A successful inbound session consumes the one-time pre-key.
-        assert_eq!(bob.otpk_store.count(), count_before - 1);
-        assert!(!bob.otpk_store.keys.contains_key(&otpk_id));
+        assert_eq!(b_acc.otpk_store.count(), otpk_count - 1);
+        assert!(!b_acc.otpk_store.keys.contains_key(&otpk_id));
+
+        let mut a_ses = a_ses;
+        let message = a_ses.encrypt(b"hello, world!").unwrap();
+        assert_eq!(b_sess.decrypt(&message).unwrap(), b"hello, world!");
     }
 
     #[test]
-    fn test_inbound_session_failure_preserves_one_time_pre_key() {
-        let alice = Account::new(None);
-        let mut bob = Account::new(None);
+    fn test_inbound_session_failure_preserves_otpk() {
+        let a_acc = Account::new(None);
+        let mut b_acc = Account::new(None);
 
-        let (bob_public, otpk_id) = bundle_with_otpk(&bob);
-        let alice_session = alice.create_outbound_session(&bob_public).unwrap();
-        let x3dh_keys = alice_session.x3dh_keys().unwrap();
+        let (b_pkb, otpk_id) = create_test_pkb_with_otpk(&b_acc);
+        let a_ses = a_acc.create_outbound_session(&b_pkb).unwrap();
+        let x3dh_keys = a_ses.x3dh_keys().unwrap();
 
-        // Force the key agreement to fail *after* the one-time pre-key is read,
-        // by marking the stored key as already used.
-        bob.otpk_store
+        // Force the key agreement to fail after the otpk is read
+        b_acc
+            .otpk_store
             .keys
             .get_mut(&otpk_id)
             .unwrap()
             .mark_as_used();
-        let count_before = bob.otpk_store.count();
+        let otpk_count = b_acc.otpk_store.count();
 
-        let result = bob.create_inbound_session(alice.ik_public(), &x3dh_keys);
+        let result = b_acc.create_inbound_session(a_acc.ik_public(), &x3dh_keys);
         assert!(result.is_err());
 
-        // The failed attempt must have put the one-time pre-key back, so a retry
-        // remains possible instead of the sender being stranded.
-        assert_eq!(bob.otpk_store.count(), count_before);
-        assert!(bob.otpk_store.keys.contains_key(&otpk_id));
+        assert_eq!(b_acc.otpk_store.count(), otpk_count);
+        assert!(b_acc.otpk_store.keys.contains_key(&otpk_id));
+    }
+
+    #[test]
+    fn test_session_still_works_when_pool_is_exhausted() {
+        let a_acc = Account::new(None);
+        let mut b_acc = Account::new(None);
+
+        // A server that has run out of one-time pre-keys for Bob.
+        let b_pkb = create_test_pkb_without_otpk(&b_acc);
+        assert!(b_pkb.otpk_public().is_none());
+
+        let mut a_ses = a_acc.create_outbound_session(&b_pkb).unwrap();
+        let x3dh_keys = a_ses.x3dh_keys().unwrap();
+        assert_eq!(x3dh_keys.otpk_id, None);
+
+        // X3DH without DH4 is permitted, so this must still establish.
+        let mut b_ses = b_acc
+            .create_inbound_session(a_acc.ik_public(), &x3dh_keys)
+            .unwrap();
+        let message = a_ses.encrypt(b"hello, world!").unwrap();
+        assert_eq!(b_ses.decrypt(&message).unwrap(), b"hello, world!");
+    }
+
+    #[test]
+    fn test_otpk_cannot_be_claimed_twice() {
+        let a_acc = Account::new(None);
+        let mut b_acc = Account::new(None);
+
+        let (b_pkb, _) = create_test_pkb_with_otpk(&b_acc);
+        let a_ses = a_acc.create_outbound_session(&b_pkb).unwrap();
+        let x3dh_keys = a_ses.x3dh_keys().unwrap();
+
+        assert!(x3dh_keys.otpk_id.is_some());
+
+        b_acc
+            .create_inbound_session(a_acc.ik_public(), &x3dh_keys)
+            .unwrap();
+
+        assert!(
+            b_acc
+                .create_inbound_session(a_acc.ik_public(), &x3dh_keys)
+                .is_err(),
+            "a spent otpk must not be reusable"
+        );
     }
 }

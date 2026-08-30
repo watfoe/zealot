@@ -12,7 +12,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 /// ```
 ///
 /// This transforms the session into a more compact format for serialization. Subsequent messages
-/// to `Bob` can also then omit this so as to be more compact.
+/// to `Bob` can also then omit this.
 #[derive(Clone, Copy)]
 pub struct OutboundSessionX3DHKeys {
     /// ID of `Bob's` the signed pre-key used in X3DH key agreement.
@@ -23,15 +23,13 @@ pub struct OutboundSessionX3DHKeys {
     pub ephemeral_key_public: X25519PublicKey,
 }
 
-/// A secure messaging session between two parties.
-///
 /// Represents an established secure communication channel using the Signal Protocol.
 /// Encapsulates a Double Ratchet instance along with metadata about the session.
 ///
 /// Sessions are typically created after a successful X3DH key agreement and
 /// are used to encrypt and decrypt messages between the two parties.
 pub struct Session {
-    /// A probabilistically globally unique identifier for this session.
+    /// A probabilistically, globally unique identifier for this session.
     pub(crate) session_id: String,
     /// Peer's public IdentityKey used to establish this session
     pub(crate) peer_ik_public: X25519PublicKey,
@@ -71,7 +69,7 @@ impl Session {
         self.x3dh_keys = None;
     }
 
-    /// Returns a probabilistically globally unique identifier for this session.
+    /// Returns the identifier for this session.
     pub fn session_id(&self) -> String {
         self.session_id.clone()
     }
@@ -92,6 +90,12 @@ impl Zeroize for Session {
         self.session_id.zeroize();
         self.ratchet.zeroize();
         self.x3dh_keys = None;
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 

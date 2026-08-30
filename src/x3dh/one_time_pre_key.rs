@@ -101,6 +101,12 @@ impl Zeroize for OneTimePreKey {
     }
 }
 
+impl Drop for OneTimePreKey {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 impl ZeroizeOnDrop for OneTimePreKey {}
 
 /// Storage for one-time pre-keys with automatic ID management.
@@ -165,7 +171,7 @@ impl OneTimePreKeyStore {
 
     /// Generates additional pre-keys to maintain the desired pool size.
     pub(crate) fn replenish(&mut self) -> HashMap<u32, X25519PublicKey> {
-        let needed = self.max_keys.saturating_sub(self.keys.len());
+        let needed = self.max_keys.saturating_sub(self.count());
         self.generate_keys(needed)
     }
 }
@@ -178,6 +184,12 @@ impl Zeroize for OneTimePreKeyStore {
         self.keys.clear();
         self.next_id = 0;
         self.max_keys = 0;
+    }
+}
+
+impl Drop for OneTimePreKeyStore {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 

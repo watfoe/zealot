@@ -58,24 +58,6 @@ pub struct X3DHPublicKeys {
 }
 
 impl X3DHPublicKeys {
-    /// Creates a new pre-key bundle from the provided keys.
-    #[allow(dead_code)]
-    pub(crate) fn new(
-        ik_public: X25519PublicKey,
-        signing_key_public: VerifyingKey,
-        signature: Signature,
-        spk_public: (u32, X25519PublicKey),
-        otpk: Option<(u32, X25519PublicKey)>,
-    ) -> Self {
-        Self {
-            ik_public,
-            signing_key_public,
-            spk_public,
-            signature,
-            otpk_public: otpk,
-        }
-    }
-
     /// Verifies the bundle's signature to ensure authenticity.
     ///
     /// This verification confirms that the signed pre-key was actually created
@@ -166,7 +148,7 @@ impl X3DH {
     /// 4. Derives the shared secret
     pub fn initiate_for_alice(
         &self,
-        a_identity: &IdentityKey,
+        a_ik: &IdentityKey,
         b_bundle: &X3DHPublicKeys,
     ) -> Result<X3DHInitializationResult, Error> {
         b_bundle
@@ -177,7 +159,7 @@ impl X3DH {
         let a_ephemeral = X25519Secret::from(seed);
 
         // DH1 = DH(IKa, SPKb)
-        let dh1 = a_identity.dh(&b_bundle.spk_public().1);
+        let dh1 = a_ik.dh(&b_bundle.spk_public().1);
         // DH2 = DH(EKa, IKb)
         let dh2 = a_ephemeral.dh(&b_bundle.ik_public());
         // DH3 = DH(EKa, SPKb)
@@ -199,20 +181,20 @@ impl X3DH {
     /// DH computations as Alice and deriving the same shared secret.
     pub fn initiate_for_bob(
         &self,
-        b_identity: &IdentityKey,
-        b_signed_pre_key: &SignedPreKey,
-        b_one_time_pre_key: Option<OneTimePreKey>,
+        b_ik: &IdentityKey,
+        b_spk: &SignedPreKey,
+        b_otpk: Option<OneTimePreKey>,
         a_identity_public: &X25519PublicKey,
         a_ephemeral_public: &X25519PublicKey,
     ) -> Result<X3DHSharedSecret, Error> {
         // DH1 = DH(SPKb, IKa)
-        let dh1 = b_signed_pre_key.dh(a_identity_public);
+        let dh1 = b_spk.dh(a_identity_public);
         // DH2 = DH(IKb, EKa)
-        let dh2 = b_identity.dh(a_ephemeral_public);
+        let dh2 = b_ik.dh(a_ephemeral_public);
         // DH3 = DH(SPKb, EKa)
-        let dh3 = b_signed_pre_key.dh(a_ephemeral_public);
+        let dh3 = b_spk.dh(a_ephemeral_public);
         // DH4 = DH(OPKb, EKa)
-        let dh4_opt: Option<Result<SharedSecret, Error>> = b_one_time_pre_key.map(|opk| {
+        let dh4_opt: Option<Result<SharedSecret, Error>> = b_otpk.map(|opk| {
             let result = opk.dh(a_ephemeral_public).map_err(|_| {
                 Error::PreKey("Error performing DH with one-time pre-key".to_string())
             })?;
@@ -272,100 +254,90 @@ mod tests {
 
     #[test]
     fn test_x3dh_key_agreement() {
-        let alice_identity = IdentityKey::new();
-        let bob_identity = IdentityKey::new();
-        let bob_signed_pre_key = SignedPreKey::new(1);
-        let bob_one_time_pre_key = OneTimePreKey::new(1);
-        let bob_bundle = X3DHPublicKeys::new(
-            bob_identity.dh_key_public(),
-            bob_identity.signing_key_public(),
-            bob_signed_pre_key.signature(&bob_identity),
-            (bob_signed_pre_key.id(), bob_signed_pre_key.public_key()),
-            Some((bob_one_time_pre_key.id(), bob_one_time_pre_key.public_key())),
-        );
+        let a_ik = IdentityKey::new();
+        let b_ik = IdentityKey::new();
+        let b_spk = SignedPreKey::new(1);
+        let b_otpk = OneTimePreKey::new(1);
+        let b_bundle = X3DHPublicKeys::try_from(
+            b_ik.dh_key_public().to_bytes(),
+            b_ik.signing_key_public().to_bytes(),
+            (b_spk.id(), b_spk.public_key().to_bytes()),
+            b_spk.signature(&b_ik).to_bytes(),
+            Some((b_otpk.id(), b_otpk.public_key().to_bytes())),
+        )
+        .unwrap();
 
-        // Verification is successful
-        assert!(bob_bundle.verify().is_ok());
+        assert!(b_bundle.verify().is_ok());
 
         // Create another bundle with different keys
-        let another_identity = IdentityKey::new();
+        let a_ik_2 = IdentityKey::new();
 
         // Try to create an invalid bundle (mixing keys)
-        let invalid_bundle = X3DHPublicKeys::new(
-            bob_identity.dh_key_public(),
-            another_identity.signing_key_public(),
-            bob_signed_pre_key.signature(&bob_identity),
-            (bob_signed_pre_key.id(), bob_signed_pre_key.public_key()),
+        let invalid_bundle = X3DHPublicKeys::try_from(
+            b_ik.dh_key_public().to_bytes(),
+            a_ik_2.signing_key_public().to_bytes(),
+            (b_spk.id(), b_spk.public_key().to_bytes()),
+            b_spk.signature(&b_ik).to_bytes(),
             None,
-        );
+        )
+        .unwrap();
 
-        // This should fail verification
         assert!(invalid_bundle.verify().is_err());
 
         // Different protocol infos should produce different shared secrets
         let x3dh1 = X3DH::new(b"Protocol-Info-1");
-        let alice_result_1 = x3dh1
-            .initiate_for_alice(&alice_identity, &bob_bundle)
-            .unwrap();
+        let a_result_1 = x3dh1.initiate_for_alice(&a_ik, &b_bundle).unwrap();
 
         let x3dh2 = X3DH::new(b"Protocol-Info-2");
-        let alice_result_2 = x3dh2
-            .initiate_for_alice(&alice_identity, &bob_bundle)
-            .unwrap();
+        let a_result_2 = x3dh2.initiate_for_alice(&a_ik, &b_bundle).unwrap();
 
-        assert_ne!(
-            alice_result_1.shared_secret.0,
-            alice_result_2.shared_secret.0
-        );
+        assert_ne!(a_result_1.shared_secret.0, a_result_2.shared_secret.0);
 
         // Alice initiates the key agreement
         let x3dh = X3DH::new(b"Test-Protocol-Info");
-        let alice_result = x3dh
-            .initiate_for_alice(&alice_identity, &bob_bundle)
-            .unwrap();
+        let a_result = x3dh.initiate_for_alice(&a_ik, &b_bundle).unwrap();
 
         // Bob processes Alice's initiation
-        let bob_secret = x3dh
+        let b_secret = x3dh
             .initiate_for_bob(
-                &bob_identity,
-                &bob_signed_pre_key,
-                Some(bob_one_time_pre_key),
-                &alice_identity.dh_key_public(),
-                &alice_result.ephemeral_public,
+                &b_ik,
+                &b_spk,
+                Some(b_otpk),
+                &a_ik.dh_key_public(),
+                &a_result.ephemeral_public,
             )
             .unwrap();
 
-        assert_eq!(alice_result.shared_secret.0, bob_secret.0);
+        assert_eq!(a_result.shared_secret.0, b_secret.0);
     }
 
     #[test]
-    fn test_x3dh_agreement_without_one_time_key() {
-        let alice_identity = IdentityKey::new();
-        let bob_identity = IdentityKey::new();
-        let bob_signed_pre_key = SignedPreKey::new(1);
-        let bob_bundle = X3DHPublicKeys::new(
-            bob_identity.dh_key_public(),
-            bob_identity.signing_key_public(),
-            bob_signed_pre_key.signature(&bob_identity),
-            (bob_signed_pre_key.id(), bob_signed_pre_key.public_key()),
+    fn test_x3dh_agreement_without_otpk() {
+        let a_ik = IdentityKey::new();
+        let b_ik = IdentityKey::new();
+        let b_spk = SignedPreKey::new(1);
+        let b_bundle = X3DHPublicKeys::try_from(
+            b_ik.dh_key_public().to_bytes(),
+            b_ik.signing_key_public().to_bytes(),
+            (b_spk.id(), b_spk.public_key().to_bytes()),
+            b_spk.signature(&b_ik).to_bytes(),
             None,
-        );
+        )
+        .unwrap();
 
         let x3dh = X3DH::new(b"Test-Protocol-Info");
-        let alice_result = x3dh
-            .initiate_for_alice(&alice_identity, &bob_bundle)
-            .unwrap();
+        let a_result = x3dh.initiate_for_alice(&a_ik, &b_bundle).unwrap();
 
-        let bob_secret = x3dh
+        let b_secret = x3dh
             .initiate_for_bob(
-                &bob_identity,
-                &bob_signed_pre_key,
+                &b_ik,
+                &b_spk,
                 None,
-                &alice_identity.dh_key_public(),
-                &alice_result.ephemeral_public,
+                &a_ik.dh_key_public(),
+                &a_result.ephemeral_public,
             )
             .unwrap();
 
-        assert_eq!(alice_result.shared_secret.0, bob_secret.0);
+        assert_eq!(a_result.shared_secret.0, b_secret.0);
     }
 }

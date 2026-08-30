@@ -50,4 +50,10 @@ impl Zeroize for RatchetState {
     }
 }
 
+impl Drop for RatchetState {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 impl ZeroizeOnDrop for RatchetState {}

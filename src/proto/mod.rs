@@ -5,7 +5,7 @@ use crate::{
     OutboundSessionX3DHKeys, Session, SignedPreKey, X25519PublicKey,
 };
 use prost::Message;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::{Duration, UNIX_EPOCH};
 
 include!(concat!(env!("OUT_DIR"), "/zealot.rs"));
@@ -20,7 +20,7 @@ impl Account {
             .unwrap_or_default()
             .as_secs();
 
-        let mut spk_keys = HashMap::with_capacity(self.spk_store.keys.len());
+        let mut spk_keys = BTreeMap::new();
         for (id, key) in self.spk_store.keys.iter() {
             spk_keys.insert(*id, key.to_bytes().to_vec());
         }
@@ -31,7 +31,7 @@ impl Account {
             keys: spk_keys,
         };
 
-        let mut otpk_keys = HashMap::with_capacity(self.otpk_store.count());
+        let mut otpk_keys = BTreeMap::new();
         for (id, key) in self.otpk_store.keys.iter() {
             otpk_keys.insert(*id, key.to_bytes().to_vec());
         }
@@ -459,8 +459,41 @@ mod tests {
     use crate::{Account, AccountConfig, Session, X3DHPublicKeys};
     use std::time::Duration;
 
+    fn create_test_x3dh_keys(account: &Account) -> X3DHPublicKeys {
+        let bundle = account.prekey_bundle();
+        let otpk = bundle
+            .otpks_public
+            .iter()
+            .next()
+            .map(|(id, key)| (*id, key.to_bytes()));
+        X3DHPublicKeys::try_from(
+            bundle.ik_public.to_bytes(),
+            bundle.signing_key_public.to_bytes(),
+            (bundle.spk_public.0, bundle.spk_public.1.to_bytes()),
+            bundle.signature.to_bytes(),
+            otpk,
+        )
+        .unwrap()
+    }
+
+    fn create_a_b_sessions() -> (Session, Session) {
+        let a_acc = Account::new(None);
+        let mut b_acc = Account::new(None);
+
+        let b_x3dh_keys = create_test_x3dh_keys(&b_acc);
+
+        let a_ses = a_acc.create_outbound_session(&b_x3dh_keys).unwrap();
+        let outbound_x3dh_keys = a_ses.x3dh_keys.as_ref().unwrap();
+
+        let b_ses = b_acc
+            .create_inbound_session(a_acc.ik_public(), &outbound_x3dh_keys)
+            .unwrap();
+
+        (a_ses, b_ses)
+    }
+
     #[test]
-    fn test_account_serialization_roundtrip() {
+    fn test_account_serde() {
         let config = AccountConfig {
             max_skipped_messages: 25,
             spk_rotation_interval: Duration::from_secs(24 * 60 * 60 * 3), // 3 days
@@ -471,95 +504,86 @@ mod tests {
         };
         let account = Account::new(Some(config));
 
-        let serialized = account.serialize().unwrap();
-        let deserialized = Account::deserialize(&serialized).unwrap();
+        let ser = account.serialize().unwrap();
+        let deser = Account::deserialize(&ser).unwrap();
 
         // Verify core functionality is preserved
-        assert_eq!(
-            account.ik_public().as_bytes(),
-            deserialized.ik_public().as_bytes()
-        );
-        assert_eq!(
-            account.config().protocol_info,
-            deserialized.config().protocol_info
-        );
-        assert_eq!(account.otpk_store.count(), deserialized.otpk_store.count());
+        assert_eq!(account.ik_public().as_bytes(), deser.ik_public().as_bytes());
+        assert_eq!(account.config().protocol_info, deser.config().protocol_info);
+        assert_eq!(account.otpk_store.count(), deser.otpk_store.count());
     }
 
     #[test]
-    fn test_session_serialization_preserves_functionality() {
-        let (mut alice_session, mut bob_session) = create_test_session_pair();
+    fn test_session_serde_preserves_functionality() {
+        let (mut a_ses, mut b_ses) = create_a_b_sessions();
 
-        // Exchange messages before serialization
-        let message1 = "Hello before serialization";
-        let encrypted1 = alice_session.encrypt(message1.as_bytes()).unwrap();
-        let decrypted1 = bob_session.decrypt(&encrypted1).unwrap();
-        assert_eq!(String::from_utf8(decrypted1).unwrap(), message1);
+        // Exchange messages before serde
+        let msg1 = "Hello!";
+        let ciphertext1 = a_ses.encrypt(msg1.as_bytes()).unwrap();
+        let plaintext1 = b_ses.decrypt(&ciphertext1).unwrap();
+        assert_eq!(String::from_utf8(plaintext1).unwrap(), msg1);
 
         // Serialize both sessions
-        let alice_serialized = alice_session.serialize().unwrap();
-        let bob_serialized = bob_session.serialize().unwrap();
+        let a_ser_ses = a_ses.serialize().unwrap();
+        let b_ser_ses = b_ses.serialize().unwrap();
 
-        let mut alice_restored = Session::deserialize(&alice_serialized).unwrap();
-        let mut bob_restored = Session::deserialize(&bob_serialized).unwrap();
+        let mut a_deser_ses = Session::deserialize(&a_ser_ses).unwrap();
+        let mut b_deser_ses = Session::deserialize(&b_ser_ses).unwrap();
 
         // Verify sessions work after restoration
-        let message2 = "Hello after serialization";
-        let encrypted2 = alice_restored.encrypt(message2.as_bytes()).unwrap();
-        let decrypted2 = bob_restored.decrypt(&encrypted2).unwrap();
-        assert_eq!(String::from_utf8(decrypted2).unwrap(), message2);
+        let msg2 = "Hello again";
+        let ciphertext2 = a_deser_ses.encrypt(msg2.as_bytes()).unwrap();
+        let plaintext2 = b_deser_ses.decrypt(&ciphertext2).unwrap();
+        assert_eq!(String::from_utf8(plaintext2).unwrap(), msg2);
     }
 
     #[test]
-    fn test_out_of_order_messages_with_serialization() {
-        let (mut alice_session, mut bob_session) = create_test_session_pair();
+    fn test_out_of_order_messages_with_serde() {
+        let (mut a_ses, mut b_ses) = create_a_b_sessions();
 
         // Alice sends multiple messages
-        let messages = ["Message 1", "Message 2", "Message 3"];
-        let encrypted_messages: Vec<_> = messages
+        let msgs = ["Message 1", "Message 2", "Message 3"];
+        let ciphertexts: Vec<_> = msgs
             .iter()
-            .map(|msg| alice_session.encrypt(msg.as_bytes()).unwrap())
+            .map(|msg| a_ses.encrypt(msg.as_bytes()).unwrap())
             .collect();
 
         // Bob receives first message
-        let _ = bob_session.decrypt(&encrypted_messages[0]).unwrap();
+        let _ = b_ses.decrypt(&ciphertexts[0]).unwrap();
 
         // Serialize Bob's session with pending messages
-        let bob_serialized = bob_session.serialize().unwrap();
-        let mut bob_restored = Session::deserialize(&bob_serialized).unwrap();
+        let b_ser_ses = b_ses.serialize().unwrap();
+        let mut b_deser_ses = Session::deserialize(&b_ser_ses).unwrap();
 
         // Receive messages out of order in restored session
-        let decrypted3 = bob_restored.decrypt(&encrypted_messages[2]).unwrap();
-        assert_eq!(String::from_utf8(decrypted3).unwrap(), messages[2]);
+        let plaintext3 = b_deser_ses.decrypt(&ciphertexts[2]).unwrap();
+        assert_eq!(String::from_utf8(plaintext3).unwrap(), msgs[2]);
 
-        let decrypted2 = bob_restored.decrypt(&encrypted_messages[1]).unwrap();
-        assert_eq!(String::from_utf8(decrypted2).unwrap(), messages[1]);
+        let plaintext2 = b_deser_ses.decrypt(&ciphertexts[1]).unwrap();
+        assert_eq!(String::from_utf8(plaintext2).unwrap(), msgs[1]);
     }
 
     #[test]
     fn test_session_x3dh_keys_lifecycle() {
-        let alice_account = Account::new(None);
-        let bob_account = Account::new(None);
-        let bob_bundle = bob_account.prekey_bundle();
-        let bob_x3dh_keys = X3DHPublicKeys::from(&bob_bundle);
+        let a_acc = Account::new(None);
+        let b_acc = Account::new(None);
+        let b_x3dh_keys = create_test_x3dh_keys(&b_acc);
 
-        let session = alice_account
-            .create_outbound_session(&bob_x3dh_keys)
-            .unwrap();
+        let a_ses = a_acc.create_outbound_session(&b_x3dh_keys).unwrap();
 
         // Session should have X3DH keys initially
-        assert!(session.x3dh_keys.is_some());
+        assert!(a_ses.x3dh_keys.is_some());
 
-        let serialized = session.serialize().unwrap();
-        let mut restored_session = Session::deserialize(&serialized).unwrap();
+        let a_ser_ses = a_ses.serialize().unwrap();
+        let mut a_deser_ses = Session::deserialize(&a_ser_ses).unwrap();
 
         // Mark as established and verify keys are cleared
-        restored_session.mark_as_established();
-        assert!(restored_session.x3dh_keys.is_none());
+        a_deser_ses.mark_as_established();
+        assert!(a_deser_ses.x3dh_keys.is_none());
     }
 
     #[test]
-    fn test_deserialize_ratchet_rejects_bad_skipped_key_lengths() {
+    fn test_deserialized_ratchet_rejects_bad_skipped_key_lengths() {
         use super::{ChainProto, RatchetProto, RatchetStateProto, SkippedMessageKeyProto};
 
         let valid_state = || RatchetStateProto {
@@ -623,22 +647,31 @@ mod tests {
         );
     }
 
-    fn create_test_session_pair() -> (Session, Session) {
-        let alice_account = Account::new(None);
-        let mut bob_account = Account::new(None);
+    #[test]
+    fn test_account_serde_output_is_deterministic() {
+        let account = Account::new(None);
 
-        let bob_bundle = bob_account.prekey_bundle();
-        let bob_x3dh_keys = X3DHPublicKeys::from(&bob_bundle);
+        let first = account.serialize().unwrap();
+        let second = account.serialize().unwrap();
+        let third = account.serialize().unwrap();
 
-        let alice_session = alice_account
-            .create_outbound_session(&bob_x3dh_keys)
-            .unwrap();
-        let outbound_x3dh_keys = alice_session.x3dh_keys.as_ref().unwrap();
+        assert_eq!(first, second, "account serialization is not reproducible");
+        assert_eq!(first, third, "account serialization is not reproducible");
+    }
 
-        let bob_session = bob_account
-            .create_inbound_session(alice_account.ik_public(), &outbound_x3dh_keys)
-            .unwrap();
+    #[test]
+    fn test_session_serde_output_is_deterministic() {
+        let (mut a_ses, mut b_ses) = create_a_b_sessions();
 
-        (alice_session, bob_session)
+        // Leave skipped message keys behind: send several, deliver only the last.
+        let msgs: Vec<_> = (0..5)
+            .map(|i| a_ses.encrypt(format!("m{i}").as_bytes()).unwrap())
+            .collect();
+        b_ses.decrypt(&msgs[4]).unwrap();
+
+        let first = b_ses.serialize().unwrap();
+        let second = b_ses.serialize().unwrap();
+
+        assert_eq!(first, second, "session serialization is not reproducible");
     }
 }
