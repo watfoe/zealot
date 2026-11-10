@@ -37,7 +37,11 @@ mod integration_tests {
 
         let outbound_x3dh_keys = a_ses.x3dh_keys().unwrap();
         let mut b_ses = b_acc
-            .create_inbound_session(a_acc.ik_public(), &outbound_x3dh_keys)
+            .create_inbound_session(
+                a_acc.ik_public(),
+                a_acc.signing_key_public(),
+                &outbound_x3dh_keys,
+            )
             .unwrap();
 
         let a_msg_1 = "Hey Bob, this is a secure message!";
@@ -115,12 +119,20 @@ mod integration_tests {
 
         let a_b_x3dh_keys = a_b_out_ses.x3dh_keys().unwrap();
         let mut a_b_in_ses = b_acc
-            .create_inbound_session(a_acc.ik_public(), &a_b_x3dh_keys)
+            .create_inbound_session(
+                a_acc.ik_public(),
+                a_acc.signing_key_public(),
+                &a_b_x3dh_keys,
+            )
             .unwrap();
 
         let a_c_x3dh_keys = a_c_out_ses.x3dh_keys().unwrap();
         let mut a_c_in_ses = c_acc
-            .create_inbound_session(a_acc.ik_public(), &a_c_x3dh_keys)
+            .create_inbound_session(
+                a_acc.ik_public(),
+                a_acc.signing_key_public(),
+                &a_c_x3dh_keys,
+            )
             .unwrap();
 
         let a_b_msg = "Hey Bob, it's Alice!";
@@ -177,7 +189,11 @@ mod integration_tests {
         let mut a_ses = a_acc.create_outbound_session(&b_x3dh_keys).unwrap();
         let outbound_x3dh_keys = a_ses.x3dh_keys().unwrap();
         let mut b_ses = b_acc
-            .create_inbound_session(a_acc.ik_public(), &outbound_x3dh_keys)
+            .create_inbound_session(
+                a_acc.ik_public(),
+                a_acc.signing_key_public(),
+                &outbound_x3dh_keys,
+            )
             .unwrap();
 
         for i in 0..3 {
@@ -204,7 +220,11 @@ mod integration_tests {
 
         let new_outbound_x3dh_keys = a_new_ses.x3dh_keys().unwrap();
         let mut b_new_ses = b_new_acc
-            .create_inbound_session(a_acc.ik_public(), &new_outbound_x3dh_keys)
+            .create_inbound_session(
+                a_acc.ik_public(),
+                a_acc.signing_key_public(),
+                &new_outbound_x3dh_keys,
+            )
             .unwrap();
 
         let a_msg_2 = "Hey Bob, reconnecting with you!";
@@ -247,7 +267,11 @@ mod integration_tests {
 
         let outbound_x3dh_keys = a_ses.x3dh_keys().unwrap();
         let b_ses = b_acc
-            .create_inbound_session(a_acc.ik_public(), &outbound_x3dh_keys)
+            .create_inbound_session(
+                a_acc.ik_public(),
+                a_acc.signing_key_public(),
+                &outbound_x3dh_keys,
+            )
             .unwrap();
 
         // Simulate mobile app pattern: serialize after every operation

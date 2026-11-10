@@ -155,7 +155,7 @@ impl X3DH {
             .verify()
             .map_err(|_| Error::PreKey("Failed to verify pre-key bundle".to_string()))?;
 
-        let seed = generate_random_seed();
+        let seed = try_generate_random_seed()?;
         let a_ephemeral = X25519Secret::from(seed);
 
         // DH1 = DH(IKa, SPKb)
@@ -236,7 +236,7 @@ impl X3DH {
             key_material.extend_from_slice(dh4_secret.as_bytes());
         }
 
-        let hkdf = Hkdf::<Sha256>::new(Some(&salt), &key_material.to_vec());
+        let hkdf = Hkdf::<Sha256>::new(Some(&salt), &key_material);
         key_material.zeroize();
 
         let mut shared_secret = Box::new([0u8; 32]);

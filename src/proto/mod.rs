@@ -1,12 +1,14 @@
-use crate::ratchet::{Chain, RatchetState};
+use crate::ratchet::{Chain, MessageKey, RatchetState, SkippedKeys};
 use crate::types::X25519Secret;
 use crate::{
     Account, AccountConfig, DoubleRatchet, Error, IdentityKey, OneTimePreKey,
     OutboundSessionX3DHKeys, Session, SignedPreKey, X25519PublicKey,
 };
+use ed25519_dalek::VerifyingKey;
 use prost::Message;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, UNIX_EPOCH};
+use zeroize::Zeroize;
 
 include!(concat!(env!("OUT_DIR"), "/zealot.rs"));
 
@@ -21,8 +23,8 @@ impl Account {
             .as_secs();
 
         let mut spk_keys = BTreeMap::new();
-        for (id, key) in self.spk_store.keys.iter() {
-            spk_keys.insert(*id, key.to_bytes().to_vec());
+        for key in self.spk_store.iter() {
+            spk_keys.insert(key.id(), key.to_bytes().to_vec());
         }
 
         let spk_store = SignedPreKeyStoreProto {
@@ -91,9 +93,9 @@ impl Account {
             AccountConfig {
                 max_skipped_messages: config_proto.max_skipped_messages,
                 spk_rotation_interval: Duration::from_secs(config_proto.spk_rotation_interval_secs),
-                min_otpks: config_proto.min_otpks as usize,
-                max_otpks: config_proto.max_otpks as usize,
-                max_spks: config_proto.max_spks as usize,
+                min_otpks: stored_count(config_proto.min_otpks)?,
+                max_otpks: stored_count(config_proto.max_otpks)?,
+                max_spks: stored_count(config_proto.max_spks)?,
                 protocol_info: config_proto.protocol_info,
             }
         } else {
@@ -101,7 +103,7 @@ impl Account {
         };
 
         let spk_store = if let Some(store) = account_proto.spk_store {
-            let mut keys = HashMap::with_capacity(store.max_keys as usize);
+            let mut keys = HashMap::with_capacity(store.keys.len());
             for (id, key_bytes) in store.keys {
                 if key_bytes.len() != 36 {
                     return Err(Error::Serde("Invalid signed pre-key length".to_string()));
@@ -112,19 +114,22 @@ impl Account {
                 keys.insert(id, spk);
             }
 
-            crate::SignedPreKeyStore {
-                keys,
-                next_id: store.next_id,
-                max_keys: store.max_keys as usize,
-            }
+            crate::SignedPreKeyStore::from_parts(keys, store.next_id, stored_count(store.max_keys)?)
+                .ok_or_else(|| {
+                    Error::Serde("Signed pre-key store is missing its current key".to_string())
+                })?
         } else {
             return Err(Error::Serde("Missing signed-pre-key store".to_string()));
         };
 
-        let spk_last_rotation = UNIX_EPOCH + Duration::from_secs(account_proto.spk_last_rotation);
+        let spk_last_rotation = UNIX_EPOCH
+            .checked_add(Duration::from_secs(account_proto.spk_last_rotation))
+            .ok_or_else(|| {
+                Error::Serde("Signed pre-key rotation timestamp out of range".to_string())
+            })?;
 
         let otpk_store = if let Some(store) = account_proto.otpk_store {
-            let mut keys = HashMap::with_capacity(config.max_otpks);
+            let mut keys = HashMap::with_capacity(store.keys.len());
             for (id, key_bytes) in store.keys {
                 if key_bytes.len() != 37 {
                     return Err(Error::Serde("Invalid one-time pre-key length".to_string()));
@@ -137,7 +142,7 @@ impl Account {
             crate::OneTimePreKeyStore {
                 keys,
                 next_id: store.next_id,
-                max_keys: store.max_keys as usize,
+                max_keys: stored_count(store.max_keys)?,
             }
         } else {
             return Err(Error::Serde("Missing one-time pre-key store".to_string()));
@@ -153,6 +158,12 @@ impl Account {
     }
 }
 
+/// Converts a count read from a serialized blob, rejecting one that does not
+/// fit in `usize` instead of silently truncating it on 32-bit targets.
+fn stored_count(value: u64) -> Result<usize, Error> {
+    usize::try_from(value).map_err(|_| Error::Serde("Stored count out of range".to_string()))
+}
+
 impl Session {
     pub fn serialize(&self) -> Result<Vec<u8>, Error> {
         let session_proto = SessionProto {
@@ -160,6 +171,7 @@ impl Session {
             peer_ik_public: self.peer_ik_public.to_bytes().to_vec(),
             ratchet: Some(serialize_ratchet(&self.ratchet)),
             x3dh_keys: self.x3dh_keys.as_ref().map(|keys| keys.serialize()),
+            peer_signing_key_public: self.peer_signing_key_public.to_bytes().to_vec(),
         };
 
         let mut buf = Vec::new();
@@ -183,6 +195,12 @@ impl Session {
         ik_public_bytes.copy_from_slice(&session_proto.peer_ik_public);
         let peer_ik_public = X25519PublicKey::from(ik_public_bytes);
 
+        let signing_key_bytes =
+            <[u8; 32]>::try_from(session_proto.peer_signing_key_public.as_slice())
+                .map_err(|_| Error::Serde("Invalid peer signing key length".to_string()))?;
+        let peer_signing_key_public = VerifyingKey::from_bytes(&signing_key_bytes)
+            .map_err(|_| Error::Serde("Invalid peer signing key".to_string()))?;
+
         let ratchet = if let Some(ratchet_proto) = session_proto.ratchet {
             deserialize_ratchet(ratchet_proto)?
         } else {
@@ -198,6 +216,7 @@ impl Session {
         Ok(Session {
             session_id: session_proto.session_id,
             peer_ik_public,
+            peer_signing_key_public,
             ratchet,
             x3dh_keys,
         })
@@ -271,19 +290,19 @@ fn serialize_ratchet(ratchet: &DoubleRatchet) -> RatchetProto {
         dh_pair: dh_pair_bytes,
     };
 
-    // Serialize in insertion order so the oldest-first eviction ordering
+    // Serialize in storage order so the oldest-first eviction ordering
     // survives a persist/restore round-trip.
-    let mut skipped_keys = Vec::with_capacity(ratchet.skipped_message_keys_order.len());
-    for map_key in &ratchet.skipped_message_keys_order {
-        if let Some(message_key) = ratchet.skipped_message_keys.get(map_key) {
-            let (header_key, message_number) = map_key;
-            skipped_keys.push(SkippedMessageKeyProto {
+    let skipped_keys = ratchet
+        .skipped_message_keys
+        .iter()
+        .map(
+            |(header_key, message_number, message_key)| SkippedMessageKeyProto {
                 header_key: header_key.to_vec(),
-                message_number: *message_number,
-                message_key: message_key.to_vec(),
-            });
-        }
-    }
+                message_number,
+                message_key: message_key.as_bytes().to_vec(),
+            },
+        )
+        .collect();
 
     RatchetProto {
         state: Some(state_proto),
@@ -418,8 +437,7 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
         next_receiving_header_key,
     };
 
-    let mut skipped_message_keys = HashMap::new();
-    let mut skipped_key_order = VecDeque::new();
+    let mut skipped_message_keys = SkippedKeys::default();
     for key in proto.skipped_message_keys {
         if key.header_key.len() != 32 {
             return Err(Error::Serde(
@@ -437,26 +455,26 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
         let mut message_key = Box::new([0u8; 32]);
         message_key.copy_from_slice(&key.message_key);
 
-        let map_key = (header_key, key.message_number);
-        if skipped_message_keys
-            .insert(map_key.clone(), message_key)
-            .is_none()
-        {
-            skipped_key_order.push_back(map_key);
-        }
+        skipped_message_keys.insert(
+            &header_key,
+            key.message_number,
+            MessageKey::from(message_key),
+        );
+        header_key.zeroize();
     }
 
     Ok(DoubleRatchet {
         state,
         skipped_message_keys,
-        skipped_message_keys_order: skipped_key_order,
         max_skip: proto.max_skip,
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{Account, AccountConfig, Session, X3DHPublicKeys};
+    use super::AccountProto;
+    use crate::{Account, AccountConfig, Error, Session, X3DHPublicKeys};
+    use prost::Message;
     use std::time::Duration;
 
     fn create_test_x3dh_keys(account: &Account) -> X3DHPublicKeys {
@@ -486,7 +504,11 @@ mod tests {
         let outbound_x3dh_keys = a_ses.x3dh_keys.as_ref().unwrap();
 
         let b_ses = b_acc
-            .create_inbound_session(a_acc.ik_public(), &outbound_x3dh_keys)
+            .create_inbound_session(
+                a_acc.ik_public(),
+                a_acc.signing_key_public(),
+                outbound_x3dh_keys,
+            )
             .unwrap();
 
         (a_ses, b_ses)
@@ -648,6 +670,21 @@ mod tests {
     }
 
     #[test]
+    fn test_deserialize_rejects_out_of_range_rotation_timestamp() {
+        let bytes = Account::new(None).serialize().unwrap();
+
+        let mut proto = AccountProto::decode(bytes.as_slice()).unwrap();
+        proto.spk_last_rotation = u64::MAX;
+        let mut tampered = Vec::new();
+        proto.encode(&mut tampered).unwrap();
+
+        assert!(matches!(
+            Account::deserialize(&tampered),
+            Err(Error::Serde(_))
+        ));
+    }
+
+    #[test]
     fn test_account_serde_output_is_deterministic() {
         let account = Account::new(None);
 
@@ -673,5 +710,160 @@ mod tests {
         let second = b_ses.serialize().unwrap();
 
         assert_eq!(first, second, "session serialization is not reproducible");
+    }
+
+    fn reencode(account: &Account, edit: impl FnOnce(&mut AccountProto)) -> Vec<u8> {
+        let bytes = account.serialize().unwrap();
+        let mut proto = AccountProto::decode(bytes.as_slice()).unwrap();
+        edit(&mut proto);
+        let mut edited = Vec::new();
+        proto.encode(&mut edited).unwrap();
+        edited
+    }
+
+    #[test]
+    fn test_deserialize_does_not_allocate_from_stored_capacities() {
+        let account = Account::new(None);
+
+        // These used to be passed straight to `HashMap::with_capacity`.
+        let spk = reencode(&account, |proto| {
+            proto.spk_store.as_mut().unwrap().max_keys = u64::MAX;
+        });
+        let restored = Account::deserialize(&spk).unwrap();
+        assert_eq!(restored.ik_public(), account.ik_public());
+
+        let otpk = reencode(&account, |proto| {
+            proto.config.as_mut().unwrap().max_otpks = u64::MAX;
+        });
+        let restored = Account::deserialize(&otpk).unwrap();
+        assert_eq!(restored.otpk_store.count(), account.otpk_store.count());
+    }
+
+    #[test]
+    fn test_deserialize_rejects_spk_store_without_its_current_key() {
+        let account = Account::new(None);
+
+        for next_id in [0, 1, 100] {
+            let tampered = reencode(&account, |proto| {
+                proto.spk_store.as_mut().unwrap().next_id = next_id;
+            });
+            assert!(
+                matches!(Account::deserialize(&tampered), Err(Error::Serde(_))),
+                "next_id {next_id} names a current key the store does not hold"
+            );
+        }
+    }
+
+    #[test]
+    fn test_account_serde_keeps_retired_signed_pre_keys() {
+        let mut account = Account::new(Some(AccountConfig {
+            spk_rotation_interval: Duration::ZERO,
+            ..AccountConfig::default()
+        }));
+        let first = account.prekey_bundle().spk_public;
+        let (second_id, second_public, _) = account.rotate_spk().unwrap();
+
+        let restored = Account::deserialize(&account.serialize().unwrap()).unwrap();
+
+        assert_eq!(
+            restored.prekey_bundle().spk_public,
+            (second_id, second_public)
+        );
+        assert_eq!(
+            restored.spk_store.get(first.0).map(|spk| spk.public_key()),
+            Some(first.1),
+            "a retired signed pre-key must survive a round trip"
+        );
+    }
+
+    #[test]
+    fn test_failed_decrypt_leaves_the_session_untouched() {
+        let (mut a_ses, mut b_ses) = create_a_b_sessions();
+
+        // Get both directions going, and leave B with a skipped key.
+        b_ses.decrypt(&a_ses.encrypt(b"hello").unwrap()).unwrap();
+        a_ses.decrypt(&b_ses.encrypt(b"hi").unwrap()).unwrap();
+        let skipped = a_ses.encrypt(b"skipped").unwrap();
+        b_ses
+            .decrypt(&a_ses.encrypt(b"delivered").unwrap())
+            .unwrap();
+
+        let tamper = |message: &crate::RatchetMessage| {
+            let mut message = message.clone();
+            message.ciphertext[0] ^= 0xFF;
+            message
+        };
+
+        // On the current chain, three messages ahead.
+        a_ses.encrypt(b"gap").unwrap();
+        a_ses.encrypt(b"gap").unwrap();
+        let ahead = a_ses.encrypt(b"ahead").unwrap();
+        // A message B already holds a skipped key for.
+        let late = skipped.clone();
+
+        let before = b_ses.serialize().unwrap();
+        assert_eq!(
+            b_ses.decrypt(&tamper(&ahead)),
+            Err(Error::MessageDecryptionFailed)
+        );
+        assert_eq!(
+            b_ses.decrypt(&tamper(&late)),
+            Err(Error::MessageDecryptionFailed)
+        );
+        assert_eq!(
+            b_ses.decrypt(&crate::RatchetMessage {
+                header: vec![7u8; 68],
+                ciphertext: vec![1u8; 32],
+            }),
+            Err(Error::HeaderKeyMismatch)
+        );
+        assert_eq!(b_ses.serialize().unwrap(), before);
+
+        // A message that would trigger a DH ratchet step on A.
+        let ratchets = b_ses.encrypt(b"new chain").unwrap();
+        let before = a_ses.serialize().unwrap();
+        assert_eq!(
+            a_ses.decrypt(&tamper(&ratchets)),
+            Err(Error::MessageDecryptionFailed)
+        );
+        assert_eq!(a_ses.serialize().unwrap(), before);
+
+        // Every genuine message still decrypts afterwards.
+        assert_eq!(a_ses.decrypt(&ratchets).unwrap(), b"new chain");
+        assert_eq!(b_ses.decrypt(&ahead).unwrap(), b"ahead");
+        assert_eq!(b_ses.decrypt(&late).unwrap(), b"skipped");
+    }
+
+    #[test]
+    fn test_session_serde_preserves_peer_identity() {
+        let (a_ses, b_ses) = create_a_b_sessions();
+
+        for session in [&a_ses, &b_ses] {
+            let restored = Session::deserialize(&session.serialize().unwrap()).unwrap();
+            assert_eq!(restored.peer_ik_public(), session.peer_ik_public());
+            assert_eq!(
+                restored.peer_signing_key_public(),
+                session.peer_signing_key_public()
+            );
+        }
+    }
+
+    #[test]
+    fn test_deserialize_rejects_malformed_peer_signing_key() {
+        use super::SessionProto;
+
+        let (a_ses, _) = create_a_b_sessions();
+        let mut proto = SessionProto::decode(a_ses.serialize().unwrap().as_slice()).unwrap();
+        // Missing entirely, and present but the wrong length.
+        for bytes in [Vec::new(), vec![0u8; 31]] {
+            proto.peer_signing_key_public = bytes;
+            let mut tampered = Vec::new();
+            proto.encode(&mut tampered).unwrap();
+
+            assert!(matches!(
+                Session::deserialize(&tampered),
+                Err(Error::Serde(_))
+            ));
+        }
     }
 }

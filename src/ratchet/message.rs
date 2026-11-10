@@ -76,13 +76,44 @@ impl RatchetMessage {
 
         let header_len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
 
-        if bytes.len() < 4 + header_len {
+        let body = &bytes[4..];
+        if body.len() < header_len {
             return Err(Error::Protocol("Invalid message format".to_string()));
         }
+        let (header, ciphertext) = body.split_at(header_len);
 
         Ok(Self {
-            header: bytes[4..4 + header_len].to_vec(),
-            ciphertext: bytes[4 + header_len..].to_vec(),
+            header: header.to_vec(),
+            ciphertext: ciphertext.to_vec(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_round_trip() {
+        let message = RatchetMessage {
+            header: vec![1, 2, 3],
+            ciphertext: vec![4, 5],
+        };
+        let decoded = RatchetMessage::from_bytes(&message.to_bytes()).unwrap();
+
+        assert_eq!(decoded.header, vec![1, 2, 3]);
+        assert_eq!(decoded.ciphertext, vec![4, 5]);
+    }
+
+    #[test]
+    fn test_header_length_beyond_the_input_is_rejected() {
+        // Claims a three byte header but carries two bytes.
+        assert!(RatchetMessage::from_bytes(&[0, 0, 0, 3, 1, 2]).is_err());
+
+        // The largest length the prefix can express. On a 32-bit target
+        // adding the prefix size to it would wrap.
+        assert!(RatchetMessage::from_bytes(&[0xFF, 0xFF, 0xFF, 0xFF, 1, 2]).is_err());
+
+        assert!(RatchetMessage::from_bytes(&[0, 0, 0]).is_err());
     }
 }

@@ -52,6 +52,7 @@ message SessionProto {
     bytes peer_ik_public = 2;
     RatchetProto ratchet = 3;
     optional OutboundSessionX3dhKeysProto x3dh_keys = 4;
+    bytes peer_signing_key_public = 5;
 }
 
 message RatchetProto {
