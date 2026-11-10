@@ -232,17 +232,18 @@ impl Account {
     /// Rotates the signed pre-key if the rotation interval has passed.
     pub fn rotate_spk(&mut self) -> Option<(u32, X25519PublicKey, Signature)> {
         let now = SystemTime::now();
-        if now
-            .duration_since(self.spk_last_rotation)
-            .unwrap_or_default()
-            >= self.config.spk_rotation_interval
-        {
-            let (id, spk) = self.spk_store.renew_key();
-            self.spk_last_rotation = now;
+        match now.duration_since(self.spk_last_rotation) {
+            Ok(elapsed) if elapsed >= self.config.spk_rotation_interval => {
+                let (id, spk) = self.spk_store.renew_key();
+                self.spk_last_rotation = now;
 
-            Some((id, spk.public_key(), spk.signature(&self.ik)))
-        } else {
-            None
+                Some((id, spk.public_key(), spk.signature(&self.ik)))
+            }
+            Ok(_) => None,
+            Err(_) => {
+                self.spk_last_rotation = now;
+                None
+            }
         }
     }
 
@@ -306,7 +307,7 @@ impl ZeroizeOnDrop for Account {}
 mod tests {
     use crate::AccountConfig;
     use crate::{Account, X3DHPublicKeys};
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     fn create_test_pkb_with_otpk(account: &Account) -> (X3DHPublicKeys, u32) {
         let pkb = account.prekey_bundle();
@@ -473,6 +474,31 @@ mod tests {
             .unwrap();
         let message = a_ses.encrypt(b"hello, world!").unwrap();
         assert_eq!(b_ses.decrypt(&message).unwrap(), b"hello, world!");
+    }
+
+    #[test]
+    fn test_spk_rotation_reanchors_when_clock_moves_backwards() {
+        let mut account = Account::new(None);
+        let interval = account.config.spk_rotation_interval;
+
+        // A rotation timestamp in the future, as a backwards clock jump leaves behind.
+        let future = SystemTime::now() + interval * 52;
+        account.spk_last_rotation = future;
+
+        // This call must not rotate, but it must repair the anchor.
+        assert!(account.rotate_spk().is_none());
+        assert!(
+            account.spk_last_rotation < future,
+            "a future rotation timestamp must be re-anchored, not left in place"
+        );
+
+        // Without re-anchoring, rotation would stay suppressed until wall time
+        // caught back up. It must instead resume on the normal schedule.
+        account.spk_last_rotation = SystemTime::now() - interval * 2;
+        assert!(
+            account.rotate_spk().is_some(),
+            "rotation must resume once the interval has genuinely elapsed"
+        );
     }
 
     #[test]
