@@ -4,6 +4,7 @@ use crate::{
     Account, AccountConfig, DoubleRatchet, Error, IdentityKey, OneTimePreKey,
     OutboundSessionX3DHKeys, Session, SignedPreKey, X25519PublicKey,
 };
+use ed25519_dalek::VerifyingKey;
 use prost::Message;
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, UNIX_EPOCH};
@@ -170,6 +171,7 @@ impl Session {
             peer_ik_public: self.peer_ik_public.to_bytes().to_vec(),
             ratchet: Some(serialize_ratchet(&self.ratchet)),
             x3dh_keys: self.x3dh_keys.as_ref().map(|keys| keys.serialize()),
+            peer_signing_key_public: self.peer_signing_key_public.to_bytes().to_vec(),
         };
 
         let mut buf = Vec::new();
@@ -193,6 +195,12 @@ impl Session {
         ik_public_bytes.copy_from_slice(&session_proto.peer_ik_public);
         let peer_ik_public = X25519PublicKey::from(ik_public_bytes);
 
+        let signing_key_bytes =
+            <[u8; 32]>::try_from(session_proto.peer_signing_key_public.as_slice())
+                .map_err(|_| Error::Serde("Invalid peer signing key length".to_string()))?;
+        let peer_signing_key_public = VerifyingKey::from_bytes(&signing_key_bytes)
+            .map_err(|_| Error::Serde("Invalid peer signing key".to_string()))?;
+
         let ratchet = if let Some(ratchet_proto) = session_proto.ratchet {
             deserialize_ratchet(ratchet_proto)?
         } else {
@@ -208,6 +216,7 @@ impl Session {
         Ok(Session {
             session_id: session_proto.session_id,
             peer_ik_public,
+            peer_signing_key_public,
             ratchet,
             x3dh_keys,
         })
@@ -495,7 +504,11 @@ mod tests {
         let outbound_x3dh_keys = a_ses.x3dh_keys.as_ref().unwrap();
 
         let b_ses = b_acc
-            .create_inbound_session(a_acc.ik_public(), &outbound_x3dh_keys)
+            .create_inbound_session(
+                a_acc.ik_public(),
+                a_acc.signing_key_public(),
+                outbound_x3dh_keys,
+            )
             .unwrap();
 
         (a_ses, b_ses)
@@ -821,4 +834,36 @@ mod tests {
         assert_eq!(b_ses.decrypt(&late).unwrap(), b"skipped");
     }
 
+    #[test]
+    fn test_session_serde_preserves_peer_identity() {
+        let (a_ses, b_ses) = create_a_b_sessions();
+
+        for session in [&a_ses, &b_ses] {
+            let restored = Session::deserialize(&session.serialize().unwrap()).unwrap();
+            assert_eq!(restored.peer_ik_public(), session.peer_ik_public());
+            assert_eq!(
+                restored.peer_signing_key_public(),
+                session.peer_signing_key_public()
+            );
+        }
+    }
+
+    #[test]
+    fn test_deserialize_rejects_malformed_peer_signing_key() {
+        use super::SessionProto;
+
+        let (a_ses, _) = create_a_b_sessions();
+        let mut proto = SessionProto::decode(a_ses.serialize().unwrap().as_slice()).unwrap();
+        // Missing entirely, and present but the wrong length.
+        for bytes in [Vec::new(), vec![0u8; 31]] {
+            proto.peer_signing_key_public = bytes;
+            let mut tampered = Vec::new();
+            proto.encode(&mut tampered).unwrap();
+
+            assert!(matches!(
+                Session::deserialize(&tampered),
+                Err(Error::Serde(_))
+            ));
+        }
+    }
 }

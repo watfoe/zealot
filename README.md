@@ -73,6 +73,7 @@ let mut alice_session = alice.create_outbound_session(&bob_x3dh_keys)
 let outbound_x3dh_keys = alice_session.x3dh_keys().unwrap();
 let mut bob_session = bob.create_inbound_session(
     alice.ik_public(),
+    alice.signing_key_public(),
     &outbound_x3dh_keys
 ).unwrap();
 
@@ -99,7 +100,7 @@ This implementation follows the Signal Protocol specifications:
 
 While this library implements the cryptographic protocols correctly, secure messaging applications should also consider:
 
-- **Key Verification**: Out-of-band verification of identity keys
+- **Key Verification**: Out-of-band verification of identity keys. An identity is *two* keys, the X25519 key (`ik_public`) and the Ed25519 key (`signing_key_public`), and neither vouches for the other, so a fingerprint or safety number must cover both. A session reports the pair it is bound to through `Session::peer_ik_public` and `Session::peer_signing_key_public`
 - **Secure Storage**: Protection of private keys and session state
 - **Metadata Protection**: Encrypting or minimizing metadata
 - **Perfect Forward Secrecy**: Regular key rotation and session refresh

@@ -33,6 +33,7 @@ fn main() {
     let mut b_ses = b_acc
         .create_inbound_session(
             a_acc.ik_public(),
+            a_acc.signing_key_public(),
             &a_ses.x3dh_keys().expect("x3dh keys"),
         )
         .expect("inbound session");
