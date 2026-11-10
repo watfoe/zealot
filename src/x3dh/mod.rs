@@ -236,7 +236,7 @@ impl X3DH {
             key_material.extend_from_slice(dh4_secret.as_bytes());
         }
 
-        let hkdf = Hkdf::<Sha256>::new(Some(&salt), &key_material.to_vec());
+        let hkdf = Hkdf::<Sha256>::new(Some(&salt), &key_material);
         key_material.zeroize();
 
         let mut shared_secret = Box::new([0u8; 32]);
