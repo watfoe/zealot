@@ -1,15 +1,18 @@
 mod chain;
 mod message;
+mod skipped;
 mod state;
 
 use crate::X3DHSharedSecret;
 use crate::error::Error;
-use crate::generate_random_seed;
-pub(crate) use crate::ratchet::chain::Chain;
+pub(crate) use crate::ratchet::chain::{Chain, MessageKey};
 use crate::ratchet::message::MessageHeader;
 pub use crate::ratchet::message::RatchetMessage;
+use crate::ratchet::skipped::MAX_SKIPPED_MESSAGE_KEYS;
+pub(crate) use crate::ratchet::skipped::SkippedKeys;
 pub(crate) use crate::ratchet::state::RatchetState;
 use crate::{X25519PublicKey, X25519Secret};
+use crate::{generate_random_seed, try_generate_random_seed};
 use aes_gcm_siv::aead::Aead;
 use aes_gcm_siv::{Aes256GcmSiv, KeyInit, Nonce};
 use hkdf::Hkdf;
@@ -17,20 +20,12 @@ use rand::TryRng;
 use rand::rngs::SysRng;
 use sha2::Sha256;
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
 use x25519_dalek::SharedSecret;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 thread_local! {
     static AD_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(256));
 }
-
-/// Maximum number of skipped message keys retained across all chains.
-///
-/// `max_skip` only bounds how many keys a single out-of-order jump may
-/// generate; keys for messages that never arrive would otherwise accumulate
-/// across chains without bound (and get re-serialized into every session blob).
-const MAX_SKIPPED_MESSAGE_KEYS: usize = 2000;
 
 fn with_ad_buffer<F, R>(f: F) -> R
 where
@@ -42,6 +37,19 @@ where
         f(&mut buffer)
     })
 }
+
+/// Fills `okm` with HKDF-SHA256 output keying material for `info`.
+#[expect(
+    clippy::expect_used,
+    reason = "HKDF-SHA256 only rejects outputs longer than 255 * 32 bytes and every caller asks for at most 44"
+)]
+fn hkdf_expand(hkdf: &Hkdf<Sha256>, info: &[u8], okm: &mut [u8]) {
+    hkdf.expand(info, okm)
+        .expect("HKDF output length is within bounds");
+}
+
+/// A new root key, a new chain key and the next header key, in that order.
+type RootKdfOutput = (Box<[u8; 32]>, Box<[u8; 32]>, Box<[u8; 32]>);
 
 /// Double Ratchet implementation for the Signal Protocol.
 ///
@@ -57,24 +65,16 @@ where
 #[derive(Clone)]
 pub struct DoubleRatchet {
     pub(crate) state: RatchetState,
-    // Map<(header_key, message_no): message_key>
-    pub(crate) skipped_message_keys: HashMap<(Box<[u8; 32]>, u32), Box<[u8; 32]>>,
-    // Insertion order of `skipped_message_keys`, kept in sync so the oldest
-    // entry can be evicted once the store reaches `MAX_SKIPPED_MESSAGE_KEYS`.
-    pub(crate) skipped_message_keys_order: VecDeque<(Box<[u8; 32]>, u32)>,
+    /// Keys for messages that were skipped over, bounded by
+    /// [`MAX_SKIPPED_MESSAGE_KEYS`].
+    pub(crate) skipped_message_keys: SkippedKeys,
     pub(crate) max_skip: u32,
 }
 
 impl Zeroize for DoubleRatchet {
     fn zeroize(&mut self) {
         self.state.zeroize();
-        for ((mut hk, _), mut key) in self.skipped_message_keys.drain() {
-            hk.zeroize();
-            key.zeroize();
-        }
-        for (mut hk, _) in self.skipped_message_keys_order.drain(..) {
-            hk.zeroize();
-        }
+        self.skipped_message_keys.clear();
     }
 }
 
@@ -134,8 +134,7 @@ impl DoubleRatchet {
                 sending_message_number: 0,
                 receiving_message_number: 0,
             },
-            skipped_message_keys: HashMap::new(),
-            skipped_message_keys_order: VecDeque::new(),
+            skipped_message_keys: SkippedKeys::default(),
             max_skip: max_skipped_messages,
         }
     }
@@ -169,8 +168,7 @@ impl DoubleRatchet {
                 sending_message_number: 0,
                 receiving_message_number: 0,
             },
-            skipped_message_keys: HashMap::new(),
-            skipped_message_keys_order: VecDeque::new(),
+            skipped_message_keys: SkippedKeys::default(),
             max_skip: max_skipped_messages,
         }
     }
@@ -181,13 +179,12 @@ impl DoubleRatchet {
         let mut header_key_a = Box::new([0u8; 32]);
         let mut next_header_key_b = Box::new([0u8; 32]);
 
-        hkdf.expand(b"Zealot-Header-Key-A", header_key_a.as_mut_slice())
-            .expect("HKDF expansion failed");
-        hkdf.expand(
+        hkdf_expand(&hkdf, b"Zealot-Header-Key-A", header_key_a.as_mut_slice());
+        hkdf_expand(
+            &hkdf,
             b"Zealot-Next-Header-Key-B",
             next_header_key_b.as_mut_slice(),
-        )
-        .expect("HKDF expansion failed");
+        );
 
         (header_key_a, next_header_key_b)
     }
@@ -200,24 +197,20 @@ impl DoubleRatchet {
     /// 1. The new root key
     /// 2. The new chain key
     /// 3. The next header encryption key
-    fn kdf_rk_he(
-        root_key: &[u8; 32],
-        dh_output: SharedSecret,
-    ) -> (Box<[u8; 32]>, Box<[u8; 32]>, Box<[u8; 32]>) {
-        let hkdf = Hkdf::<Sha256>::new(Some(root_key), &dh_output.to_bytes());
+    fn kdf_rk_he(root_key: &[u8; 32], dh_output: SharedSecret) -> RootKdfOutput {
+        let hkdf = Hkdf::<Sha256>::new(Some(root_key), dh_output.as_bytes());
 
         let mut new_root_key = Box::new([0u8; 32]);
         let mut chain_key = Box::new([0u8; 32]);
         let mut next_header_key = Box::new([0u8; 32]);
 
-        hkdf.expand(b"Zealot-E2E-Root", new_root_key.as_mut_slice())
-            .expect("HKDF expansion failed for root key");
-
-        hkdf.expand(b"Zealot-E2E-Chain", chain_key.as_mut_slice())
-            .expect("HKDF expansion failed for chain key");
-
-        hkdf.expand(b"Zealot-E2E-Next-Header", next_header_key.as_mut_slice())
-            .expect("HKDF expansion failed for next header key");
+        hkdf_expand(&hkdf, b"Zealot-E2E-Root", new_root_key.as_mut_slice());
+        hkdf_expand(&hkdf, b"Zealot-E2E-Chain", chain_key.as_mut_slice());
+        hkdf_expand(
+            &hkdf,
+            b"Zealot-E2E-Next-Header",
+            next_header_key.as_mut_slice(),
+        );
 
         drop(dh_output);
 
@@ -231,6 +224,8 @@ impl DoubleRatchet {
     /// 2. Encrypts the message header with the header key
     /// 3. Encrypts the message with the message key
     /// 4. Increments the sending chain message counter
+    ///
+    /// The session is left untouched if any step fails.
     pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<RatchetMessage, Error> {
         let header = MessageHeader {
             public_key: self.public_key(),
@@ -239,13 +234,18 @@ impl DoubleRatchet {
         };
         let encrypted_header = self.encrypt_header(&header)?;
 
-        let message_key = self.state.sending_chain.next();
+        // Advance a copy of the chain and only keep it once the message has
+        // been produced, so a failure cannot leave the chain one step ahead of
+        // the message counter.
+        let mut sending_chain = self.state.sending_chain.clone();
+        let message_key = sending_chain.next();
         let ciphertext = with_ad_buffer(|buffer| {
             buffer.extend_from_slice(self.state.ad.as_slice());
             buffer.extend_from_slice(&encrypted_header);
-            Self::encrypt_message(&message_key, plaintext, buffer)
+            Self::encrypt_message(message_key.as_bytes(), plaintext, buffer)
         })?;
 
+        self.state.sending_chain = sending_chain;
         self.state.sending_message_number = self.state.sending_message_number.wrapping_add(1);
 
         Ok(RatchetMessage {
@@ -292,16 +292,23 @@ impl DoubleRatchet {
         let hkdf = Hkdf::<Sha256>::new(None, key);
 
         let mut derived_material = Box::new([0u8; 44]);
-        hkdf.expand(b"Zealot-E2E-Keys", derived_material.as_mut_slice())
-            .expect("HKDF expansion failed");
+        hkdf_expand(&hkdf, b"Zealot-E2E-Keys", derived_material.as_mut_slice());
 
+        let ciphertext = Self::seal(&derived_material, plaintext, ad);
+
+        derived_material.zeroize();
+
+        ciphertext
+    }
+
+    fn seal(derived_material: &[u8; 44], plaintext: &[u8], ad: &[u8]) -> Result<Vec<u8>, Error> {
         let key = <&aes_gcm_siv::Key<Aes256GcmSiv>>::try_from(&derived_material[0..32])
             .map_err(|_| Error::Crypto("Invalid derived key length".to_string()))?;
         let cipher = Aes256GcmSiv::new(key);
         let nonce = <&Nonce>::try_from(&derived_material[32..44])
             .map_err(|_| Error::Crypto("Invalid derived nonce length".to_string()))?;
 
-        let ciphertext = cipher
+        cipher
             .encrypt(
                 nonce,
                 aes_gcm_siv::aead::Payload {
@@ -309,138 +316,208 @@ impl DoubleRatchet {
                     aad: ad,
                 },
             )
-            .map_err(|_| Error::Protocol("Message encryption failed".to_string()));
-
-        derived_material.zeroize();
-
-        ciphertext
+            .map_err(|_| Error::Protocol("Message encryption failed".to_string()))
     }
 
     /// Decrypts a message using the Double Ratchet algorithm.
     ///
-    /// This performs the following steps:
-    /// 1. Tries to decrypt with skipped message keys first
-    /// 2. Decrypts the message header
-    /// 3. Performs a DH ratchet step if needed
-    /// 4. Generates any skipped message keys
-    /// 5. Derives the message key and decrypts the message
+    /// The header is tried against, in order:
+    /// 1. The current receiving header key. The message is then either the
+    ///    next one on the current chain, one further ahead (the keys in between
+    ///    are stored as skipped), or one that was skipped earlier.
+    /// 2. The header key of each earlier chain that still has skipped keys
+    ///    outstanding.
+    /// 3. The next receiving header key, which means the peer has started a
+    ///    new chain and a DH ratchet step is due.
+    ///
+    /// Every step works on copies of the keys it advances, and the session is
+    /// only updated once the message body has authenticated. A message that
+    /// fails for any reason leaves the session exactly as it was.
     pub fn decrypt(&mut self, message: &RatchetMessage) -> Result<Vec<u8>, Error> {
-        let old_state = self.state.clone();
-        let old_skipped_keys = self.skipped_message_keys.clone();
-        let old_skipped_order = self.skipped_message_keys_order.clone();
-
-        match self.try_skipped_message_keys(message) {
-            Ok(Some(plaintext)) => return Ok(plaintext),
-            Err(err) => return Err(err),
-            Ok(None) => {}
+        if let Some(rhk) = self.state.receiving_header_key.as_deref()
+            && let Some(header) = Self::decrypt_header(&message.header, rhk)
+        {
+            return self.decrypt_on_current_chain(message, &header);
         }
 
-        let (header, should_ratchet) = self.try_decrypt_header(&message.header)?;
-
-        if should_ratchet {
-            if header.previous_chain_length < self.state.receiving_message_number {
-                return Err(Error::Protocol("Invalid previous chain length".to_string()));
-            }
-
-            if let Err(err) = self.skip_message_keys(header.previous_chain_length) {
-                self.state = old_state;
-                self.skipped_message_keys = old_skipped_keys;
-                self.skipped_message_keys_order = old_skipped_order;
-                return Err(err);
-            }
-            self.dh_ratchet(&header);
+        if let Some(result) = self.decrypt_on_earlier_chain(message) {
+            return result;
         }
 
-        if header.message_number < self.state.receiving_message_number {
-            return Err(Error::DuplicateMessage);
-        }
-
-        if header.message_number > self.state.receiving_message_number {
-            if let Err(err) = self.skip_message_keys(header.message_number) {
-                self.state = old_state;
-                self.skipped_message_keys = old_skipped_keys;
-                self.skipped_message_keys_order = old_skipped_order;
-                return Err(err);
-            }
-        }
-
-        let message_key = self.state.receiving_chain.next();
-        self.state.receiving_message_number = self.state.receiving_message_number.wrapping_add(1);
-
-        let plaintext = with_ad_buffer(|buffer| {
-            buffer.extend_from_slice(self.state.ad.as_slice());
-            buffer.extend_from_slice(&message.header);
-            Self::decrypt_message(&message_key, &message.ciphertext, buffer)
-        })
-        .inspect_err(|_| {
-            self.state = old_state;
-            self.skipped_message_keys = old_skipped_keys;
-            self.skipped_message_keys_order = old_skipped_order;
-        })?;
-
-        Ok(plaintext)
-    }
-
-    /// Tries to decrypt a message using previously skipped message keys.
-    ///
-    /// This is used for handling out-of-order messages.
-    fn try_skipped_message_keys(
-        &mut self,
-        message: &RatchetMessage,
-    ) -> Result<Option<Vec<u8>>, Error> {
-        // Find the stored entry, if any, whose header key decrypts this
-        // message's header to the message number it was stored under.
-        let mut matched = None;
-        for (header_key, message_no) in self.skipped_message_keys.keys() {
-            if let Some(header) = self.decrypt_header(&message.header, header_key) {
-                if header.message_number == *message_no {
-                    matched = Some((header_key.clone(), *message_no));
-                    break;
-                }
-            }
-        }
-
-        let Some(map_key) = matched else {
-            return Ok(None);
-        };
-
-        let message_key = self
-            .skipped_message_keys
-            .get(&map_key)
-            .expect("Key must exist");
-
-        let plaintext = with_ad_buffer(|buffer| {
-            buffer.extend_from_slice(self.state.ad.as_slice());
-            buffer.extend_from_slice(&message.header);
-            Self::decrypt_message(message_key, &message.ciphertext, buffer)
-        })?;
-
-        self.remove_skipped_message_key(&map_key);
-
-        Ok(Some(plaintext))
-    }
-
-    /// Tries to decrypt a header with both current and next header keys.
-    ///
-    /// This allows for recovery if a header key rotation has happened.
-    fn try_decrypt_header(&self, encrypted_header: &[u8]) -> Result<(MessageHeader, bool), Error> {
-        if let Some(ref rhk) = self.state.receiving_header_key {
-            if let Some(header) = self.decrypt_header(encrypted_header, rhk) {
-                return Ok((header, false));
-            }
-        }
-
-        if let Some(ref nrhk) = self.state.next_receiving_header_key {
-            if let Some(header) = self.decrypt_header(encrypted_header, nrhk) {
-                return Ok((header, true));
-            }
+        if let Some(nrhk) = self.state.next_receiving_header_key.as_deref()
+            && let Some(header) = Self::decrypt_header(&message.header, nrhk)
+        {
+            return self.decrypt_with_dh_ratchet(message, &header);
         }
 
         Err(Error::HeaderKeyMismatch)
     }
 
+    /// Decrypts a message whose header matched the current receiving chain.
+    fn decrypt_on_current_chain(
+        &mut self,
+        message: &RatchetMessage,
+        header: &MessageHeader,
+    ) -> Result<Vec<u8>, Error> {
+        let expected = self.state.receiving_message_number;
+        let number = header.message_number;
+
+        if number < expected {
+            // Either skipped earlier and only arriving now, or a replay.
+            let chain = self
+                .state
+                .receiving_header_key
+                .as_deref()
+                .and_then(|rhk| self.skipped_message_keys.position(rhk));
+            return match chain {
+                Some(chain) => self.decrypt_with_skipped_key(message, chain, number),
+                None => Err(Error::DuplicateMessage),
+            };
+        }
+
+        if number - expected > self.max_skip {
+            return Err(Error::TooManySkipped);
+        }
+
+        let mut receiving_chain = self.state.receiving_chain.clone();
+        let skipped = Self::advance_chain(&mut receiving_chain, expected, number);
+        let message_key = receiving_chain.next();
+        let plaintext = Self::open(&self.state.ad, &message_key, message)?;
+
+        self.state.receiving_chain = receiving_chain;
+        self.state.receiving_message_number = number.wrapping_add(1);
+        if let Some(rhk) = self.state.receiving_header_key.as_deref() {
+            for (number, key) in skipped {
+                self.skipped_message_keys.insert(rhk, number, key);
+            }
+        }
+
+        Ok(plaintext)
+    }
+
+    /// Tries the header against every earlier chain that still has skipped
+    /// keys outstanding. Returns `None` if the header belongs to none of them.
+    fn decrypt_on_earlier_chain(
+        &mut self,
+        message: &RatchetMessage,
+    ) -> Option<Result<Vec<u8>, Error>> {
+        let current = self.state.receiving_header_key.as_deref();
+
+        let (chain, number) = self
+            .skipped_message_keys
+            .header_keys()
+            // The current chain's header key has already been tried.
+            .filter(|(_, header_key)| Some(*header_key) != current)
+            .find_map(|(chain, header_key)| {
+                Self::decrypt_header(&message.header, header_key)
+                    .map(|header| (chain, header.message_number))
+            })?;
+
+        Some(self.decrypt_with_skipped_key(message, chain, number))
+    }
+
+    /// Decrypts a message with the stored key for `number` on a skipped chain,
+    /// consuming the key on success.
+    fn decrypt_with_skipped_key(
+        &mut self,
+        message: &RatchetMessage,
+        chain: usize,
+        number: u32,
+    ) -> Result<Vec<u8>, Error> {
+        let Some(message_key) = self.skipped_message_keys.get(chain, number) else {
+            // The header authenticated under a chain we know, but its key was
+            // already used (a replay) or has been evicted.
+            return Err(Error::DuplicateMessage);
+        };
+
+        let plaintext = Self::open(&self.state.ad, message_key, message)?;
+        self.skipped_message_keys.remove(chain, number);
+
+        Ok(plaintext)
+    }
+
+    /// Decrypts the first message seen on a new chain, performing the DH
+    /// ratchet step that chain calls for.
+    fn decrypt_with_dh_ratchet(
+        &mut self,
+        message: &RatchetMessage,
+        header: &MessageHeader,
+    ) -> Result<Vec<u8>, Error> {
+        let expected = self.state.receiving_message_number;
+        let previous_chain_length = header.previous_chain_length;
+
+        if previous_chain_length < expected {
+            return Err(Error::Protocol("Invalid previous chain length".to_string()));
+        }
+        if previous_chain_length - expected > self.max_skip || header.message_number > self.max_skip
+        {
+            return Err(Error::TooManySkipped);
+        }
+
+        // Keys for whatever the peer sent on the chain being closed that has
+        // not arrived yet. There is no such chain before the first message.
+        let closing_keys = if self.state.receiving_header_key.is_some() {
+            let mut closing_chain = self.state.receiving_chain.clone();
+            Self::advance_chain(&mut closing_chain, expected, previous_chain_length)
+        } else {
+            Vec::new()
+        };
+
+        let mut next_state = self.state.clone();
+        Self::dh_ratchet(&mut next_state, header)?;
+
+        let opening_keys =
+            Self::advance_chain(&mut next_state.receiving_chain, 0, header.message_number);
+        let message_key = next_state.receiving_chain.next();
+        next_state.receiving_message_number = header.message_number.wrapping_add(1);
+
+        let plaintext = Self::open(&next_state.ad, &message_key, message)?;
+
+        let previous_state = std::mem::replace(&mut self.state, next_state);
+        if let Some(header_key) = previous_state.receiving_header_key.as_deref() {
+            for (number, key) in closing_keys {
+                self.skipped_message_keys.insert(header_key, number, key);
+            }
+        }
+        if let Some(header_key) = self.state.receiving_header_key.as_deref() {
+            for (number, key) in opening_keys {
+                self.skipped_message_keys.insert(header_key, number, key);
+            }
+        }
+
+        Ok(plaintext)
+    }
+
+    /// Advances `chain` from message number `from` up to, but not including,
+    /// `until`, returning the message key of every number stepped over.
+    ///
+    /// Callers bound `until - from` by `max_skip` first.
+    fn advance_chain(chain: &mut Chain, from: u32, until: u32) -> Vec<(u32, MessageKey)> {
+        let count = until.saturating_sub(from) as usize;
+        // More keys than the store holds would be evicted straight away, so
+        // there is no point reserving room for them up front.
+        let mut keys = Vec::with_capacity(count.min(MAX_SKIPPED_MESSAGE_KEYS));
+        for number in from..until {
+            keys.push((number, chain.next()));
+        }
+        keys
+    }
+
+    /// Authenticates and decrypts a message body.
+    fn open(
+        ad: &[u8; 64],
+        message_key: &MessageKey,
+        message: &RatchetMessage,
+    ) -> Result<Vec<u8>, Error> {
+        with_ad_buffer(|buffer| {
+            buffer.extend_from_slice(ad);
+            buffer.extend_from_slice(&message.header);
+            Self::decrypt_message(message_key.as_bytes(), &message.ciphertext, buffer)
+        })
+    }
+
     /// Decrypts a message header using a specific header key.
-    fn decrypt_header(&self, encrypted_header: &[u8], hk: &[u8; 32]) -> Option<MessageHeader> {
+    fn decrypt_header(encrypted_header: &[u8], hk: &[u8; 32]) -> Option<MessageHeader> {
         if encrypted_header.len() < 12 {
             return None;
         }
@@ -467,129 +544,64 @@ impl DoubleRatchet {
     }
 
     /// Performs a Diffie-Hellman ratchet step.
-    fn dh_ratchet(&mut self, header: &MessageHeader) {
-        let seed = generate_random_seed();
+    fn dh_ratchet(state: &mut RatchetState, header: &MessageHeader) -> Result<(), Error> {
+        let seed = try_generate_random_seed()?;
 
-        self.state.previous_sending_chain_length = self.state.sending_chain.index;
+        state.previous_sending_chain_length = state.sending_chain.index;
 
         // Update remote public key
-        self.state.remote_dh_key_public = Some(header.public_key);
+        state.remote_dh_key_public = Some(header.public_key);
 
         // Reset message counters
-        self.state.receiving_message_number = 0;
-        self.state.sending_message_number = 0;
+        state.receiving_message_number = 0;
+        state.sending_message_number = 0;
 
-        self.state.receiving_header_key = self.state.next_receiving_header_key.clone();
-        self.state.sending_header_key = Some(self.state.next_sending_header_key.clone());
+        state.receiving_header_key = state.next_receiving_header_key.clone();
+        state.sending_header_key = Some(state.next_sending_header_key.clone());
 
         // Derive new receiving chain
-        let dh_output = self.state.dh_pair.dh(&header.public_key);
+        let dh_output = state.dh_pair.dh(&header.public_key);
         let (new_root_key, chain_key, next_header_key) =
-            Self::kdf_rk_he(&self.state.root_key, dh_output);
-        self.state.root_key = new_root_key;
-        self.state.receiving_chain = Chain::new(chain_key);
-        self.state.next_receiving_header_key = Some(next_header_key);
+            Self::kdf_rk_he(&state.root_key, dh_output);
+        state.root_key = new_root_key;
+        state.receiving_chain = Chain::new(chain_key);
+        state.next_receiving_header_key = Some(next_header_key);
 
         // Generate new DH key pair
-        self.state.dh_pair = X25519Secret::from(seed);
+        state.dh_pair = X25519Secret::from(seed);
 
         // Derive new sending chain
-        let dh_output = self.state.dh_pair.dh(&header.public_key);
+        let dh_output = state.dh_pair.dh(&header.public_key);
         let (new_root_key, chain_key, next_header_key) =
-            Self::kdf_rk_he(&self.state.root_key, dh_output);
-        self.state.root_key = new_root_key;
-        self.state.sending_chain = Chain::new(chain_key);
-        self.state.next_sending_header_key = next_header_key;
-    }
-
-    /// Generates and stores skipped message keys.
-    ///
-    /// When receiving a message with a higher message number than expected,
-    /// this method generates all the intermediate message keys to maintain
-    /// security and allow for later decryption of out-of-order messages.
-    fn skip_message_keys(&mut self, until: u32) -> Result<(), Error> {
-        if until.saturating_sub(self.state.receiving_message_number) > self.max_skip {
-            return Err(Error::TooManySkipped);
-        }
-
-        if self.state.receiving_chain.chain_key.as_ref() != &[0u8; 32] {
-            while self.state.receiving_message_number < until {
-                let message_key = self.state.receiving_chain.next();
-
-                if let Some(rhk) = self.state.receiving_header_key.clone() {
-                    self.insert_skipped_message_key(
-                        rhk,
-                        self.state.receiving_message_number,
-                        message_key,
-                    );
-                }
-
-                self.state.receiving_message_number =
-                    self.state.receiving_message_number.wrapping_add(1);
-            }
-        }
+            Self::kdf_rk_he(&state.root_key, dh_output);
+        state.root_key = new_root_key;
+        state.sending_chain = Chain::new(chain_key);
+        state.next_sending_header_key = next_header_key;
 
         Ok(())
-    }
-
-    /// Stores a skipped message key, evicting the oldest entries once the store
-    /// reaches [`MAX_SKIPPED_MESSAGE_KEYS`].
-    fn insert_skipped_message_key(
-        &mut self,
-        header_key: Box<[u8; 32]>,
-        message_number: u32,
-        message_key: Box<[u8; 32]>,
-    ) {
-        while self.skipped_message_keys.len() >= MAX_SKIPPED_MESSAGE_KEYS {
-            match self.skipped_message_keys_order.pop_front() {
-                Some(oldest) => {
-                    if let Some(mut evicted) = self.skipped_message_keys.remove(&oldest) {
-                        evicted.zeroize();
-                    }
-                }
-                None => break,
-            }
-        }
-
-        let map_key = (header_key, message_number);
-        match self
-            .skipped_message_keys
-            .insert(map_key.clone(), message_key)
-        {
-            // A key for this (header_key, message_number) already existed: it was
-            // overwritten in place, so the ordering is unchanged.
-            Some(mut previous) => previous.zeroize(),
-            None => self.skipped_message_keys_order.push_back(map_key),
-        }
-    }
-
-    fn remove_skipped_message_key(&mut self, map_key: &(Box<[u8; 32]>, u32)) {
-        if let Some(mut message_key) = self.skipped_message_keys.remove(map_key) {
-            message_key.zeroize();
-        }
-        if let Some(pos) = self
-            .skipped_message_keys_order
-            .iter()
-            .position(|k| k == map_key)
-        {
-            self.skipped_message_keys_order.remove(pos);
-        }
     }
 
     fn decrypt_message(key: &[u8; 32], ciphertext: &[u8], ad: &[u8]) -> Result<Vec<u8>, Error> {
         let hkdf = Hkdf::<Sha256>::new(None, key.as_slice());
 
         let mut derived_material = Box::new([0u8; 44]);
-        hkdf.expand(b"Zealot-E2E-Keys", derived_material.as_mut_slice())
-            .expect("HKDF expansion failed");
+        hkdf_expand(&hkdf, b"Zealot-E2E-Keys", derived_material.as_mut_slice());
 
+        let plaintext = Self::unseal(&derived_material, ciphertext, ad);
+
+        derived_material.zeroize();
+
+        plaintext
+    }
+
+    fn unseal(derived_material: &[u8; 44], ciphertext: &[u8], ad: &[u8]) -> Result<Vec<u8>, Error> {
         let aes_key = <&aes_gcm_siv::Key<Aes256GcmSiv>>::try_from(&derived_material[0..32])
             .map_err(|_| Error::Crypto("Invalid derived key length".to_string()))?;
         let cipher = Aes256GcmSiv::new(aes_key);
         let nonce = <&Nonce>::try_from(&derived_material[32..44])
             .map_err(|_| Error::Crypto("Invalid derived nonce length".to_string()))?;
 
-        let plaintext = cipher
+        cipher
             .decrypt(
                 nonce,
                 aes_gcm_siv::aead::Payload {
@@ -597,11 +609,7 @@ impl DoubleRatchet {
                     aad: ad,
                 },
             )
-            .map_err(|_| Error::MessageDecryptionFailed);
-
-        derived_material.zeroize();
-
-        plaintext
+            .map_err(|_| Error::MessageDecryptionFailed)
     }
 }
 
@@ -862,10 +870,6 @@ mod tests {
         );
 
         assert_eq!(b_dr.skipped_message_keys.len(), MAX_SKIPPED_MESSAGE_KEYS);
-        assert_eq!(
-            b_dr.skipped_message_keys_order.len(),
-            MAX_SKIPPED_MESSAGE_KEYS
-        );
 
         // The oldest keys were evicted: message 0 can no longer be recovered,
         // while the newest retained key (message `total - 1`) still can.
@@ -875,5 +879,61 @@ mod tests {
             String::from_utf8(recovered).unwrap(),
             format!("Message {}", total - 1)
         );
+    }
+
+    #[test]
+    fn test_skipped_keys_survive_a_dh_ratchet() {
+        let (mut a_dr, mut b_dr) = create_test_drs();
+
+        // Chain 1: B only sees the first of three messages.
+        let chain_1: Vec<_> = (0..3)
+            .map(|i| a_dr.encrypt(format!("one {i}").as_bytes()).unwrap())
+            .collect();
+        assert_eq!(b_dr.decrypt(&chain_1[0]).unwrap(), b"one 0");
+
+        // B replies, so A's next messages start a new chain.
+        let reply = b_dr.encrypt(b"reply").unwrap();
+        assert_eq!(a_dr.decrypt(&reply).unwrap(), b"reply");
+
+        // Chain 2: B sees the second message first. That one message closes
+        // chain 1 with two keys outstanding and skips one key on chain 2.
+        let chain_2: Vec<_> = (0..2)
+            .map(|i| a_dr.encrypt(format!("two {i}").as_bytes()).unwrap())
+            .collect();
+        assert_eq!(b_dr.decrypt(&chain_2[1]).unwrap(), b"two 1");
+        assert_eq!(b_dr.skipped_message_keys.len(), 3);
+        assert_eq!(b_dr.skipped_message_keys.header_keys().count(), 2);
+
+        // Everything that was skipped still decrypts, in any order.
+        assert_eq!(b_dr.decrypt(&chain_1[2]).unwrap(), b"one 2");
+        assert_eq!(b_dr.decrypt(&chain_2[0]).unwrap(), b"two 0");
+
+        // A replay on a closed chain that still has keys outstanding is
+        // recognised for what it is.
+        assert_eq!(b_dr.decrypt(&chain_1[2]), Err(Error::DuplicateMessage));
+
+        assert_eq!(b_dr.decrypt(&chain_1[1]).unwrap(), b"one 1");
+        assert_eq!(b_dr.skipped_message_keys.len(), 0);
+
+        // With its last key used, the closed chain's header key is forgotten.
+        assert_eq!(b_dr.decrypt(&chain_1[1]), Err(Error::HeaderKeyMismatch));
+        // The current chain still reports replays as duplicates.
+        assert_eq!(b_dr.decrypt(&chain_2[0]), Err(Error::DuplicateMessage));
+    }
+
+    #[test]
+    fn test_skipped_key_is_kept_when_its_message_fails_to_authenticate() {
+        let (mut a_dr, mut b_dr) = create_test_drs();
+
+        let first = a_dr.encrypt(b"first").unwrap();
+        let second = a_dr.encrypt(b"second").unwrap();
+        assert_eq!(b_dr.decrypt(&second).unwrap(), b"second");
+
+        let mut tampered = first.clone();
+        tampered.ciphertext[0] ^= 0xFF;
+        assert_eq!(b_dr.decrypt(&tampered), Err(Error::MessageDecryptionFailed));
+
+        // The genuine message can still be delivered afterwards.
+        assert_eq!(b_dr.decrypt(&first).unwrap(), b"first");
     }
 }

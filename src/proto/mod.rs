@@ -1,12 +1,13 @@
-use crate::ratchet::{Chain, RatchetState};
+use crate::ratchet::{Chain, MessageKey, RatchetState, SkippedKeys};
 use crate::types::X25519Secret;
 use crate::{
     Account, AccountConfig, DoubleRatchet, Error, IdentityKey, OneTimePreKey,
     OutboundSessionX3DHKeys, Session, SignedPreKey, X25519PublicKey,
 };
 use prost::Message;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, UNIX_EPOCH};
+use zeroize::Zeroize;
 
 include!(concat!(env!("OUT_DIR"), "/zealot.rs"));
 
@@ -275,19 +276,19 @@ fn serialize_ratchet(ratchet: &DoubleRatchet) -> RatchetProto {
         dh_pair: dh_pair_bytes,
     };
 
-    // Serialize in insertion order so the oldest-first eviction ordering
+    // Serialize in storage order so the oldest-first eviction ordering
     // survives a persist/restore round-trip.
-    let mut skipped_keys = Vec::with_capacity(ratchet.skipped_message_keys_order.len());
-    for map_key in &ratchet.skipped_message_keys_order {
-        if let Some(message_key) = ratchet.skipped_message_keys.get(map_key) {
-            let (header_key, message_number) = map_key;
-            skipped_keys.push(SkippedMessageKeyProto {
+    let skipped_keys = ratchet
+        .skipped_message_keys
+        .iter()
+        .map(
+            |(header_key, message_number, message_key)| SkippedMessageKeyProto {
                 header_key: header_key.to_vec(),
-                message_number: *message_number,
-                message_key: message_key.to_vec(),
-            });
-        }
-    }
+                message_number,
+                message_key: message_key.as_bytes().to_vec(),
+            },
+        )
+        .collect();
 
     RatchetProto {
         state: Some(state_proto),
@@ -422,8 +423,7 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
         next_receiving_header_key,
     };
 
-    let mut skipped_message_keys = HashMap::new();
-    let mut skipped_key_order = VecDeque::new();
+    let mut skipped_message_keys = SkippedKeys::default();
     for key in proto.skipped_message_keys {
         if key.header_key.len() != 32 {
             return Err(Error::Serde(
@@ -441,19 +441,17 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
         let mut message_key = Box::new([0u8; 32]);
         message_key.copy_from_slice(&key.message_key);
 
-        let map_key = (header_key, key.message_number);
-        if skipped_message_keys
-            .insert(map_key.clone(), message_key)
-            .is_none()
-        {
-            skipped_key_order.push_back(map_key);
-        }
+        skipped_message_keys.insert(
+            &header_key,
+            key.message_number,
+            MessageKey::from(message_key),
+        );
+        header_key.zeroize();
     }
 
     Ok(DoubleRatchet {
         state,
         skipped_message_keys,
-        skipped_message_keys_order: skipped_key_order,
         max_skip: proto.max_skip,
     })
 }
@@ -695,4 +693,62 @@ mod tests {
 
         assert_eq!(first, second, "session serialization is not reproducible");
     }
+    #[test]
+    fn test_failed_decrypt_leaves_the_session_untouched() {
+        let (mut a_ses, mut b_ses) = create_a_b_sessions();
+
+        // Get both directions going, and leave B with a skipped key.
+        b_ses.decrypt(&a_ses.encrypt(b"hello").unwrap()).unwrap();
+        a_ses.decrypt(&b_ses.encrypt(b"hi").unwrap()).unwrap();
+        let skipped = a_ses.encrypt(b"skipped").unwrap();
+        b_ses
+            .decrypt(&a_ses.encrypt(b"delivered").unwrap())
+            .unwrap();
+
+        let tamper = |message: &crate::RatchetMessage| {
+            let mut message = message.clone();
+            message.ciphertext[0] ^= 0xFF;
+            message
+        };
+
+        // On the current chain, three messages ahead.
+        a_ses.encrypt(b"gap").unwrap();
+        a_ses.encrypt(b"gap").unwrap();
+        let ahead = a_ses.encrypt(b"ahead").unwrap();
+        // A message B already holds a skipped key for.
+        let late = skipped.clone();
+
+        let before = b_ses.serialize().unwrap();
+        assert_eq!(
+            b_ses.decrypt(&tamper(&ahead)),
+            Err(Error::MessageDecryptionFailed)
+        );
+        assert_eq!(
+            b_ses.decrypt(&tamper(&late)),
+            Err(Error::MessageDecryptionFailed)
+        );
+        assert_eq!(
+            b_ses.decrypt(&crate::RatchetMessage {
+                header: vec![7u8; 68],
+                ciphertext: vec![1u8; 32],
+            }),
+            Err(Error::HeaderKeyMismatch)
+        );
+        assert_eq!(b_ses.serialize().unwrap(), before);
+
+        // A message that would trigger a DH ratchet step on A.
+        let ratchets = b_ses.encrypt(b"new chain").unwrap();
+        let before = a_ses.serialize().unwrap();
+        assert_eq!(
+            a_ses.decrypt(&tamper(&ratchets)),
+            Err(Error::MessageDecryptionFailed)
+        );
+        assert_eq!(a_ses.serialize().unwrap(), before);
+
+        // Every genuine message still decrypts afterwards.
+        assert_eq!(a_ses.decrypt(&ratchets).unwrap(), b"new chain");
+        assert_eq!(b_ses.decrypt(&ahead).unwrap(), b"ahead");
+        assert_eq!(b_ses.decrypt(&late).unwrap(), b"skipped");
+    }
+
 }
