@@ -121,7 +121,11 @@ impl Account {
             return Err(Error::Serde("Missing signed-pre-key store".to_string()));
         };
 
-        let spk_last_rotation = UNIX_EPOCH + Duration::from_secs(account_proto.spk_last_rotation);
+        let spk_last_rotation = UNIX_EPOCH
+            .checked_add(Duration::from_secs(account_proto.spk_last_rotation))
+            .ok_or_else(|| {
+                Error::Serde("Signed pre-key rotation timestamp out of range".to_string())
+            })?;
 
         let otpk_store = if let Some(store) = account_proto.otpk_store {
             let mut keys = HashMap::with_capacity(config.max_otpks);
@@ -456,7 +460,9 @@ fn deserialize_ratchet(proto: RatchetProto) -> Result<DoubleRatchet, Error> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Account, AccountConfig, Session, X3DHPublicKeys};
+    use super::AccountProto;
+    use crate::{Account, AccountConfig, Error, Session, X3DHPublicKeys};
+    use prost::Message;
     use std::time::Duration;
 
     fn create_test_x3dh_keys(account: &Account) -> X3DHPublicKeys {
@@ -645,6 +651,21 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn test_deserialize_rejects_out_of_range_rotation_timestamp() {
+        let bytes = Account::new(None).serialize().unwrap();
+
+        let mut proto = AccountProto::decode(bytes.as_slice()).unwrap();
+        proto.spk_last_rotation = u64::MAX;
+        let mut tampered = Vec::new();
+        proto.encode(&mut tampered).unwrap();
+
+        assert!(matches!(
+            Account::deserialize(&tampered),
+            Err(Error::Serde(_))
+        ));
     }
 
     #[test]
