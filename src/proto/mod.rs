@@ -22,8 +22,8 @@ impl Account {
             .as_secs();
 
         let mut spk_keys = BTreeMap::new();
-        for (id, key) in self.spk_store.keys.iter() {
-            spk_keys.insert(*id, key.to_bytes().to_vec());
+        for key in self.spk_store.iter() {
+            spk_keys.insert(key.id(), key.to_bytes().to_vec());
         }
 
         let spk_store = SignedPreKeyStoreProto {
@@ -92,9 +92,9 @@ impl Account {
             AccountConfig {
                 max_skipped_messages: config_proto.max_skipped_messages,
                 spk_rotation_interval: Duration::from_secs(config_proto.spk_rotation_interval_secs),
-                min_otpks: config_proto.min_otpks as usize,
-                max_otpks: config_proto.max_otpks as usize,
-                max_spks: config_proto.max_spks as usize,
+                min_otpks: stored_count(config_proto.min_otpks)?,
+                max_otpks: stored_count(config_proto.max_otpks)?,
+                max_spks: stored_count(config_proto.max_spks)?,
                 protocol_info: config_proto.protocol_info,
             }
         } else {
@@ -102,7 +102,7 @@ impl Account {
         };
 
         let spk_store = if let Some(store) = account_proto.spk_store {
-            let mut keys = HashMap::with_capacity(store.max_keys as usize);
+            let mut keys = HashMap::with_capacity(store.keys.len());
             for (id, key_bytes) in store.keys {
                 if key_bytes.len() != 36 {
                     return Err(Error::Serde("Invalid signed pre-key length".to_string()));
@@ -113,11 +113,10 @@ impl Account {
                 keys.insert(id, spk);
             }
 
-            crate::SignedPreKeyStore {
-                keys,
-                next_id: store.next_id,
-                max_keys: store.max_keys as usize,
-            }
+            crate::SignedPreKeyStore::from_parts(keys, store.next_id, stored_count(store.max_keys)?)
+                .ok_or_else(|| {
+                    Error::Serde("Signed pre-key store is missing its current key".to_string())
+                })?
         } else {
             return Err(Error::Serde("Missing signed-pre-key store".to_string()));
         };
@@ -129,7 +128,7 @@ impl Account {
             })?;
 
         let otpk_store = if let Some(store) = account_proto.otpk_store {
-            let mut keys = HashMap::with_capacity(config.max_otpks);
+            let mut keys = HashMap::with_capacity(store.keys.len());
             for (id, key_bytes) in store.keys {
                 if key_bytes.len() != 37 {
                     return Err(Error::Serde("Invalid one-time pre-key length".to_string()));
@@ -142,7 +141,7 @@ impl Account {
             crate::OneTimePreKeyStore {
                 keys,
                 next_id: store.next_id,
-                max_keys: store.max_keys as usize,
+                max_keys: stored_count(store.max_keys)?,
             }
         } else {
             return Err(Error::Serde("Missing one-time pre-key store".to_string()));
@@ -156,6 +155,12 @@ impl Account {
             config,
         })
     }
+}
+
+/// Converts a count read from a serialized blob, rejecting one that does not
+/// fit in `usize` instead of silently truncating it on 32-bit targets.
+fn stored_count(value: u64) -> Result<usize, Error> {
+    usize::try_from(value).map_err(|_| Error::Serde("Stored count out of range".to_string()))
 }
 
 impl Session {
@@ -693,6 +698,71 @@ mod tests {
 
         assert_eq!(first, second, "session serialization is not reproducible");
     }
+
+    fn reencode(account: &Account, edit: impl FnOnce(&mut AccountProto)) -> Vec<u8> {
+        let bytes = account.serialize().unwrap();
+        let mut proto = AccountProto::decode(bytes.as_slice()).unwrap();
+        edit(&mut proto);
+        let mut edited = Vec::new();
+        proto.encode(&mut edited).unwrap();
+        edited
+    }
+
+    #[test]
+    fn test_deserialize_does_not_allocate_from_stored_capacities() {
+        let account = Account::new(None);
+
+        // These used to be passed straight to `HashMap::with_capacity`.
+        let spk = reencode(&account, |proto| {
+            proto.spk_store.as_mut().unwrap().max_keys = u64::MAX;
+        });
+        let restored = Account::deserialize(&spk).unwrap();
+        assert_eq!(restored.ik_public(), account.ik_public());
+
+        let otpk = reencode(&account, |proto| {
+            proto.config.as_mut().unwrap().max_otpks = u64::MAX;
+        });
+        let restored = Account::deserialize(&otpk).unwrap();
+        assert_eq!(restored.otpk_store.count(), account.otpk_store.count());
+    }
+
+    #[test]
+    fn test_deserialize_rejects_spk_store_without_its_current_key() {
+        let account = Account::new(None);
+
+        for next_id in [0, 1, 100] {
+            let tampered = reencode(&account, |proto| {
+                proto.spk_store.as_mut().unwrap().next_id = next_id;
+            });
+            assert!(
+                matches!(Account::deserialize(&tampered), Err(Error::Serde(_))),
+                "next_id {next_id} names a current key the store does not hold"
+            );
+        }
+    }
+
+    #[test]
+    fn test_account_serde_keeps_retired_signed_pre_keys() {
+        let mut account = Account::new(Some(AccountConfig {
+            spk_rotation_interval: Duration::ZERO,
+            ..AccountConfig::default()
+        }));
+        let first = account.prekey_bundle().spk_public;
+        let (second_id, second_public, _) = account.rotate_spk().unwrap();
+
+        let restored = Account::deserialize(&account.serialize().unwrap()).unwrap();
+
+        assert_eq!(
+            restored.prekey_bundle().spk_public,
+            (second_id, second_public)
+        );
+        assert_eq!(
+            restored.spk_store.get(first.0).map(|spk| spk.public_key()),
+            Some(first.1),
+            "a retired signed pre-key must survive a round trip"
+        );
+    }
+
     #[test]
     fn test_failed_decrypt_leaves_the_session_untouched() {
         let (mut a_ses, mut b_ses) = create_a_b_sessions();

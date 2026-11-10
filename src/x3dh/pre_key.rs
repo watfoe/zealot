@@ -100,33 +100,59 @@ impl Drop for SignedPreKey {
 impl ZeroizeOnDrop for SignedPreKey {}
 
 /// Storage for signed pre-keys with automatic rotation and ID management.
+///
+/// The current key is held apart from the retired ones, so a store without a
+/// current key cannot be represented.
 pub struct SignedPreKeyStore {
-    pub(crate) keys: HashMap<u32, SignedPreKey>,
+    pub(crate) current: SignedPreKey,
+    /// Retired keys, kept so a delayed inbound X3DH message that referenced a
+    /// recently rotated key can still be processed.
+    pub(crate) previous: HashMap<u32, SignedPreKey>,
     pub(crate) next_id: u32,
     pub(crate) max_keys: usize,
 }
 
 impl SignedPreKeyStore {
     pub(crate) fn new(max_keys: usize) -> Self {
-        let mut keys = HashMap::with_capacity(max_keys);
         let id = 1;
-        keys.insert(id, SignedPreKey::new(id));
 
         Self {
-            keys,
+            current: SignedPreKey::new(id),
+            previous: HashMap::new(),
             next_id: id + 1,
             max_keys,
         }
     }
 
+    /// Rebuilds a store from its serialized parts.
+    ///
+    /// The current key is the one issued last, `next_id - 1`. Returns `None`
+    /// if `keys` does not contain it.
+    pub(crate) fn from_parts(
+        mut keys: HashMap<u32, SignedPreKey>,
+        next_id: u32,
+        max_keys: usize,
+    ) -> Option<Self> {
+        let current = keys.remove(&next_id.wrapping_sub(1))?;
+
+        Some(Self {
+            current,
+            previous: keys,
+            next_id,
+            max_keys,
+        })
+    }
+
     pub(crate) fn renew_key(&mut self) -> (u32, &SignedPreKey) {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
-        self.keys.insert(id, SignedPreKey::new(id));
+
+        let retired = std::mem::replace(&mut self.current, SignedPreKey::new(id));
+        self.previous.insert(retired.id(), retired);
 
         self.evict_stale_keys();
 
-        (id, self.get_current())
+        (id, &self.current)
     }
 
     /// Evicts the oldest signed pre-keys until at most `max_keys` remain.
@@ -138,35 +164,51 @@ impl SignedPreKeyStore {
     /// `max_keys * spk_rotation_interval` of history instead of growing without
     /// bound. At least the current key is always kept.
     fn evict_stale_keys(&mut self) {
-        let retain = self.max_keys.max(1);
-        while self.keys.len() > retain {
+        // The current key counts towards `max_keys`.
+        let retain = self.max_keys.max(1) - 1;
+        while self.previous.len() > retain {
             // Ids increase monotonically with each rotation, so the smallest id
             // is the oldest key.
-            let oldest_id = match self.keys.keys().min() {
+            let oldest_id = match self.previous.keys().min() {
                 Some(id) => *id,
                 None => break,
             };
-            self.keys.remove(&oldest_id);
+            self.previous.remove(&oldest_id);
         }
     }
 
     pub(crate) fn get(&self, id: u32) -> Option<&SignedPreKey> {
-        self.keys.get(&id)
+        if self.current.id() == id {
+            Some(&self.current)
+        } else {
+            self.previous.get(&id)
+        }
     }
 
     /// Returns the most recently created signed pre-key.
     pub(crate) fn get_current(&self) -> &SignedPreKey {
-        let current_id = self.next_id - 1;
-        self.keys.get(&current_id).unwrap()
+        &self.current
+    }
+
+    /// Every stored key, current and retired, in no particular order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &SignedPreKey> {
+        std::iter::once(&self.current).chain(self.previous.values())
+    }
+
+    /// Total number of stored keys, including the current one.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        1 + self.previous.len()
     }
 }
 
 impl Zeroize for SignedPreKeyStore {
     fn zeroize(&mut self) {
-        for (_, key) in self.keys.iter_mut() {
+        self.current.zeroize();
+        for key in self.previous.values_mut() {
             key.zeroize();
         }
-        self.keys.clear();
+        self.previous.clear();
         self.next_id = 0;
         self.max_keys = 0;
     }
@@ -227,7 +269,7 @@ mod tests {
         }
 
         // The store never grows beyond `max_keys`.
-        assert_eq!(store.keys.len(), max_keys);
+        assert_eq!(store.len(), max_keys);
 
         // The most recent `max_keys` keys are retained; older ones are evicted.
         let newest = *ids.last().unwrap();
