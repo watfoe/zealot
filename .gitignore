@@ -6,3 +6,6 @@ Cargo.lock
 *.DS_store
 FIXES.md
 .claude
+
+/fuzz/in/account_decode
+/fuzz/in/session_decode
