@@ -155,7 +155,7 @@ impl X3DH {
             .verify()
             .map_err(|_| Error::PreKey("Failed to verify pre-key bundle".to_string()))?;
 
-        let seed = generate_random_seed();
+        let seed = try_generate_random_seed()?;
         let a_ephemeral = X25519Secret::from(seed);
 
         // DH1 = DH(IKa, SPKb)

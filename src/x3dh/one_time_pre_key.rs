@@ -178,7 +178,7 @@ impl OneTimePreKeyStore {
 
 impl Zeroize for OneTimePreKeyStore {
     fn zeroize(&mut self) {
-        for (_, key) in self.keys.iter_mut() {
+        for key in self.keys.values_mut() {
             key.zeroize();
         }
         self.keys.clear();

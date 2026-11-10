@@ -1,4 +1,4 @@
-use crate::{X25519PublicKey, X25519Secret};
+use crate::{Error, X25519PublicKey, X25519Secret};
 use ed25519_dalek::Signer;
 use ed25519_dalek::{SecretKey, SigningKey, ed25519};
 use rand::TryRng;
@@ -6,13 +6,30 @@ use rand::rngs::SysRng;
 use x25519_dalek::SharedSecret;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-/// Generates a cryptographically secure random 32-byte seed.
-pub(crate) fn generate_random_seed() -> Box<[u8; 32]> {
+/// Generates a cryptographically secure random 32-byte seed, reporting a
+/// failure of the operating system's random number generator as
+/// [`Error::Random`].
+pub(crate) fn try_generate_random_seed() -> Result<Box<[u8; 32]>, Error> {
     let mut seed = Box::new([0u8; 32]);
     SysRng
         .try_fill_bytes(seed.as_mut_slice())
-        .expect("Zealot: Random number generator should not fail");
-    seed
+        .map_err(|_| Error::Random)?;
+    Ok(seed)
+}
+
+/// Generates a cryptographically secure random 32-byte seed.
+///
+/// # Panics
+///
+/// Panics if the operating system's random number generator fails. This is
+/// only used by constructors whose signatures are infallible; anything that
+/// handles data from the network uses [`try_generate_random_seed`] instead.
+#[expect(
+    clippy::expect_used,
+    reason = "key generation cannot continue without the OS random number generator, and these constructors are infallible"
+)]
+pub(crate) fn generate_random_seed() -> Box<[u8; 32]> {
+    try_generate_random_seed().expect("Zealot: Random number generator should not fail")
 }
 
 /// Long-term identity key pair that combines signing and key agreement capabilities.
